@@ -1,0 +1,266 @@
+# Цвета и оформление сообщений задаются через MiniMessage:
+# https://docs.advntr.dev/minimessage/format.html
+
+chat-processing:
+    # Если сообщение начинается с этого символа, плагин уберёт его перед проверкой и отправкой
+    # Оставьте пустую строку, если такой префикс не нужен
+    remove-leading-prefix: "!"
+    # Сообщения из перечисленных команд тоже проходят через чат-фильтры
+    # Названия указываются без '/'
+    # Пустой список [] отключает обработку этой группы
+    commands:
+        # Команды вида /msg <игрок> <сообщение>
+        targeted-private:
+            [ "msg", "m", "tell", "t", "w", "whisper", "pm", "message", "emsg", "etell", "et", "ew", "ewhisper", "epm", "emessage" ]
+        # Команды вида /reply <сообщение>, где ник указывать не нужно
+        reply-private: [ "r", "reply", "er", "ereply" ]
+        # Команды, у которых всё после названия считается сообщением
+        direct-chat: [ "me", "action", "eme", "eaction" ]
+        # Команды почты
+        # Подкоманды ниже определяют, где начинается текст сообщения
+        mail: [ "mail", "email" ]
+        mail-targeted-subcommands: [ "send" ]
+        mail-broadcast-subcommands: [ "sendall" ]
+
+chat-format:
+    enabled: true
+    # {message} обязательно оставьте в строке: на его место подставляется сообщение игрока
+    # Можно использовать {player} и любые плейсхолдеры PlaceholderAPI
+    format: "<white>{player} <dark_gray>→ <white>{message}"
+    # Позволяет скрыть значение одного приватного плейсхолдера, например рейтинг игрока
+    # Скрытие применяется к отправителям с правом chat-format.hover.permission
+    restricted-placeholder:
+        value: ""
+        # Если у того же значения есть другие плейсхолдеры, перечислите их здесь
+        # Пример: [ "%rating%", "%legacy_rating%" ]
+        aliases: []
+        hidden-text: "<gray>???"
+    hover:
+        enabled: true
+        lines:
+            - "<gray>Игрок: <white>{player}"
+            - "<dark_gray>[клик] начать лс"
+        # Для отправителей с этим правом зрителям показываются permission-lines вместо lines
+        permission: ""
+        permission-lines:
+            - "<gray>Игрок: <white>{player}"
+            - "<dark_gray>[клик] начать лс"
+        # Зритель с этим правом всё равно увидит обычный hover такого отправителя
+        bypass-permission: ""
+        # Команда подставляется в поле ввода при клике
+        # {player} заменяется на ник отправителя
+        click-command: "/msg {player} "
+
+mentions:
+    # Эти слова работают как глобальное упоминание: @all и @все
+    # Пустой список [] полностью отключает глобальные упоминания
+    global-aliases: [ "all", "все" ]
+    action-bar: "<color:#FFDD81>%player% <gray>упомянул вас в чате"
+    sound:
+        name: "entity.experience_orb.pickup"
+        volume: 1.0
+        pitch: 0.5
+
+integrations:
+    # Если указанного плагина нет на сервере, PupsChat просто пропустит интеграцию
+    premium-vanish:
+        enabled: true
+    essentials-vanish:
+        enabled: true
+    strike-practice:
+        enabled: true
+        duel-chat: true
+        auto-messages: true
+
+playtime:
+    enabled: false
+    # Минимальное количество минут на сервере перед доступом к чату
+    min-minutes: 3
+    message: "<color:#FF638F>Наиграйте минимум %minutes% минут для использования чата"
+
+caps:
+    enabled: true
+    # Начиная с этого количества заглавных букв сообщение переводится в нижний регистр
+    max-caps: 6
+
+characters:
+    enabled: true
+    # Эти символы можно использовать в чате, каждый новый добавляйте отдельной строкой
+    allowed-emojis:
+        - "☠"
+        - "❤"
+        - "🔥"
+        - "⭐"
+        - "✨"
+        - "⚡"
+        - "✅"
+        - "❌"
+        - "⚠"
+        - "✘"
+        - "№"
+        - "☺"
+    message: "<color:#FF638F>Найдены недопустимые символы"
+
+symbols:
+    enabled: true
+    # Сообщение блокируется, если в нём больше max-symbols символов из строки chars
+    max-symbols: 7
+    chars: ".,!@#$%^&*(){}[]<>|~;:+-/\\=_№"
+    message: "<color:#FF638F>Слишком много спецсимволов в сообщении"
+
+spam:
+    enabled: true
+    # Насколько похожими должны быть два сообщения, чтобы плагин посчитал их повтором
+    similarity-percent: 90
+    # Сколько последних сообщений игрока сравнивать и как долго хранить их в секундах
+    history-messages: 2
+    history-seconds: 60
+    message: "<color:#FF638F>Не повторяйте сообщения"
+
+flood:
+    enabled: true
+    # Игрок может отправить не больше max-messages за time-window секунд
+    max-messages: 4
+    time-window: 6
+    message: "<color:#FF638F>Вы отправляете сообщения слишком быстро"
+
+ads:
+    enabled: true
+    # История нужна для рекламы, разбитой на несколько сообщений, например "server" и ".ru"
+    history-messages: 3
+    history-seconds: 60
+    blocked-domains:
+        - ".ru"
+        - ".su"
+        - ".pro"
+        - ".fun"
+        - ".xyz"
+        - ".com"
+        - ".net"
+        - ".online"
+        - ".space"
+        - ".io"
+        - ".shop"
+        - ".site"
+        - ".lol"
+        - ".gg"
+        - ".pw"
+        - ".me"
+    # Ссылки из этого списка разрешены и не считаются рекламой
+    # Пример: [ "bworld.pro", "dsc.bworld.pro" ]
+    allowed-links: []
+    message: "<color:#FF638F>Не отправляйте рекламу"
+
+words:
+    enabled: true
+    # Сообщение блокируется, если содержит одну из строк ниже без учёта регистра
+    # Каждое новое слово или выражение добавляйте отдельной строкой
+    # blocked-words: [ "запрещённое слово", "еще запрещённое словосочетание" ]
+    blocked-words: []
+    message: "<color:#FF638F>Обнаружено запрещённое слово"
+
+random-chars:
+    enabled: true
+    # Пороги срабатывания: повтор одной буквы, целое число и число с точкой или запятой
+    # Например, при значении 6 будут заблокированы "аааааа" и шестизначное целое число
+    repeated-character-threshold: 6
+    integer-digits-threshold: 6
+    decimal-digits-threshold: 5
+    message: "<color:#FF638F>Обнаружен бессмысленный набор символов"
+
+punishment:
+    enabled: true
+    # После max-violations нарушений игрок получает мут
+    # Старые нарушения сгорают через violation-expire-seconds
+    # Длительность каждого следующего мута берётся из списка
+    max-violations: 3
+    violation-expire-seconds: 180
+    # Длительность мутов в минутах
+    mute-durations: [ 2, 5, 10, 15 ]
+    # Если игрок столько минут не получал мут, следующий снова будет минимальной длительности
+    escalation-reset-minutes: 30
+    mute-message: "<color:#FF638F>Чат временно недоступен. Длительность мута: %time%"
+    muted-message: "<color:#FF638F>До снятия мута осталось %time%"
+
+# action: warn отправляет сообщение, block отменяет его
+# В обоих режимах автор получает предупреждение и нарушение
+# Когда нарушений становится max-violations за window-minutes, применяется punishment
+toxicity:
+    enabled: true
+    action: warn
+    max-violations: 10
+    window-minutes: 10
+    messages:
+        - "<color:#FF638F>Это всего лишь игра. Будьте спокойнее"
+        - "<color:#FF638F>Будьте игроком, которого уважают другие"
+    # Правила находятся в toxicity.txt рядом с config.yml и перечитываются при /pupschat reload
+    # Слова-исключения проверяются раньше exact и stem и никогда не считаются токсичными
+    # allowed-words: [ "педикюр" ]
+    allowed-words: []
+
+alerts:
+    # Служебное уведомление персоналу с правом pupschat.alerts
+    # Доступны: {player}, {check}, {violations} и {message}
+    format: "<color:#FCD05C>[ғɪʟᴛᴇʀ] <gray>{player} <white>{check} <color:#FF638F>✘ <white>x{violations} <color:#FCD05C>{message}"
+    check-names:
+        ads: "Реклама"
+        words: "Запрещённые слова"
+        symbols: "Символы"
+        characters: "Недопустимые символы"
+        random-chars: "Случайные символы"
+        spam: "Спам"
+
+hints:
+    enabled: true
+    # Если сообщение содержит любое слово из keywords,
+    # игрок получает указанную подсказку
+    # sound можно оставить пустым: "", если звук не нужен
+    list: []
+    # Пример:
+    # list:
+    #   - keywords: [ "помогите!!!", "помощь" ]
+    #     message: "<gray>Используйте <white>/help"
+    #     sound: "entity.experience_orb.pickup"
+    #     volume: 1.0
+    #     pitch: 1.0
+
+# Подмена слов игрока на другие
+replacements:
+    enabled: false
+    words: {}
+    # Пример:
+    # words:
+    #   "уя": "ez"
+    #   "пп": "gg"
+
+# Автосообщения после боя
+auto-message:
+    enabled: true
+    # Можно указывать несколько сообщений - плагин выберет случайное из списка
+    messages:
+        default: [ "gg", "гг", "ggwp" ]
+        toxic: [ "ez", "ез", "изи" ]
+
+command-messages:
+    # action-bar или chat
+    player-settings-output: "action-bar"
+
+    no-permission: "<color:#FF638F>Недостаточно прав"
+    reload-success: "<green>Конфиг перезагружен"
+    reload-failed: "<color:#FF638F>Не удалось загрузить {file}: {error}"
+    reload-usage: "<gray>Использование: /pupschat reload"
+    unmutef-usage: "<gray>Использование: /unmutef <игрок>"
+    unmutef-success: "<gray>Мут фильтра снят с игрока <white>{player}"
+    unmutef-not-muted: "<gray>Игрок <white>{player} <gray>не находится в муте фильтра"
+    action-bar-usage: '<gray>Использование: /acb (ник|@a) \<сообщение>'
+    invalid-format: "<color:#FF638F>Ошибка форматирования: {error}"
+    player-not-found: "<color:#FF638F>Игрок не найден"
+    chat-all: "<gray>Чат <color:#A4FF63>открыт"
+    chat-duel: "<gray>Чат <color:#FF638F>скрыт <gray>(<color:#FFDD81>только в дуэли<gray>)"
+    chat-off: "<gray>Чат <color:#FF638F>скрыт"
+    auto-message-default: "<gray>Автосообщения <color:#A4FF63>включены <gray>(<color:#FFDD81>ᴏбычʜый<gray>)"
+    auto-message-toxic: "<gray>Автосообщения <color:#A4FF63>включены <gray>(<color:#FFDD81>тᴏᴋᴄиᴋ<gray>)"
+    auto-message-off: "<gray>Автосообщения <color:#FF638F>выключены"
+    auto-message-unavailable: "<color:#FF638F>Автосообщения сейчас недоступны"
+    mentions-enabled: "<gray>Упоминания <color:#A4FF63>включены"
+    mentions-disabled: "<gray>Упоминания <color:#FF638F>выключены"

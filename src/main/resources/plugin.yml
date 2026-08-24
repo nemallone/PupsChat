@@ -1,0 +1,60 @@
+name: PupsChat
+version: '${version}'
+main: nemallone.bworld.chat.PupsChat
+api-version: '1.21'
+description: Настраиваемый чат и автоматическая модерация для Paper
+authors: [bworld, nemallone]
+website: https://github.com/nemallone/PupsChat
+softdepend: [PremiumVanish, Essentials, PlaceholderAPI, StrikePractice]
+commands:
+  pupschat:
+    description: Перезагрузка конфигурации PupsChat
+    usage: /pupschat reload
+    aliases: [pchat]
+  mentions:
+    description: Переключение уведомлений об упоминаниях
+  automessage:
+    description: Переключение сообщения после боя
+  chathide:
+    description: Переключение видимости чата
+  unmutef:
+    description: Снятие мута, выданного фильтром
+    usage: /unmutef <игрок>
+  acb:
+    description: Отправка сообщения в action bar
+    usage: /acb (ник|@a) <сообщение>
+
+permissions:
+  pupschat.admin:
+    default: op
+    children:
+      pupschat.unmutef: true
+  pupschat.unmutef:
+    default: op
+  pupschat.mentions:
+    default: true
+  pupschat.chat:
+    default: true
+  pupschat.acb:
+    default: op
+  pupschat.globalmentions:
+    default: op
+  pupschat.bypass.*:
+    default: op
+    children:
+      pupschat.bypass.caps: true
+      pupschat.bypass.characters: true
+      pupschat.bypass.spam: true
+      pupschat.bypass.ads: true
+      pupschat.bypass.words: true
+      pupschat.bypass.symbols: true
+      pupschat.bypass.flood: true
+      pupschat.bypass.playtime: true
+      pupschat.bypass.randomchars: true
+      pupschat.bypass.toxicity: true
+      pupschat.bypass.mute: true
+      pupschat.bypass.announcements: true
+  pupschat.alerts:
+    default: op
+  pupschat.automessage:
+    default: true

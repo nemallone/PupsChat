@@ -1,0 +1,11 @@
+enabled: false
+interval: 300
+
+messages:
+  - lines:
+      - "<color:#FFDD81>Настройте объявления в plugins/PupsChat/announcements.yml"
+    sound:
+      name: "block.note_block.hat"
+      volume: 0.5
+      pitch: 1.0
+    bypass-permission: "pupschat.bypass.announcements"
