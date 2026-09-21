@@ -45,7 +45,7 @@ internal class ChatListener(
     private val toxicityManager: ToxicityManager,
     private val chatHideManager: ChatHideManager,
     private val hintManager: HintManager,
-    private val autoMessageManager: AutoMessageManager
+    private val autoMessageManager: AutoMessageManager,
 ) : Listener {
 
     private companion object {
@@ -214,13 +214,14 @@ internal class ChatListener(
     private fun processChat(event: AsyncChatEvent) {
         val sender = event.player
         val currentSettings = settings
+        val originalMessage = plainSerializer.serialize(event.message())
 
         if (muteManager.rejectIfMuted(sender)) {
             event.isCancelled = true
             return
         }
 
-        var plainMessage = plainSerializer.serialize(event.message())
+        var plainMessage = originalMessage
         var messageComponent = event.message()
 
         val prefixPattern = currentSettings.leadingPrefixPattern

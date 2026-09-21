@@ -7,6 +7,7 @@ import nemallone.bworld.chat.filter.ToxicityManager
 import nemallone.bworld.chat.filter.ViolationManager
 import nemallone.bworld.chat.integrations.PracticeIntegration
 import nemallone.bworld.chat.listeners.ChatListener
+import nemallone.bworld.chat.logging.ChatLogManager
 import nemallone.bworld.chat.messaging.AnnouncementManager
 import nemallone.bworld.chat.messaging.AutoMessageMode
 import nemallone.bworld.chat.messaging.AutoMessageManager
@@ -44,6 +45,7 @@ class PupsChat : JavaPlugin() {
     private lateinit var hintManager: HintManager
     private lateinit var autoMessageManager: AutoMessageManager
     private lateinit var chatListener: ChatListener
+    private lateinit var chatLogManager: ChatLogManager
     private lateinit var dataSaver: PlayerDataSaver
     private var practiceIntegration: PracticeIntegration? = null
     private val invalidMessageKeys = HashSet<String>()
@@ -89,6 +91,8 @@ class PupsChat : JavaPlugin() {
             mentionsManager = MentionsManager(this)
             floodManager = FloodManager(this, violationManager)
             autoMessageManager = AutoMessageManager(this)
+            chatLogManager = ChatLogManager(this)
+            server.pluginManager.registerEvents(chatLogManager, this)
 
             practiceIntegration = if (server.pluginManager.isPluginEnabled("StrikePractice")) {
                 val integration = PracticeIntegration(this, autoMessageManager)
@@ -110,7 +114,7 @@ class PupsChat : JavaPlugin() {
                 toxicityManager,
                 chatHideManager,
                 hintManager,
-                autoMessageManager
+                autoMessageManager,
             )
             server.pluginManager.registerEvents(chatListener, this)
         } catch (exception: PlayerDataException) {
@@ -139,6 +143,7 @@ class PupsChat : JavaPlugin() {
                 queueFinalDataSave("automessage.yml", autoMessageManager::queueSave)
             }
         } finally {
+            if (::chatLogManager.isInitialized) chatLogManager.close()
             if (::dataSaver.isInitialized) dataSaver.close()
         }
     }
@@ -168,13 +173,37 @@ class PupsChat : JavaPlugin() {
         }
     }
 
+    override fun onTabComplete(
+        sender: CommandSender,
+        command: Command,
+        alias: String,
+        args: Array<out String>,
+    ): List<String> {
+        if (!command.name.equals("pupschat", true) || args.isEmpty()) return emptyList()
+        if (args.size == 1) {
+            val candidates = buildList {
+                if (sender.hasPermission("pupschat.admin")) add("reload")
+                if (sender.hasPermission("pupschat.logs.view") || sender.hasPermission("pupschat.logs.clear")) {
+                    add("logs")
+                }
+            }
+            return candidates.filter { it.startsWith(args[0], ignoreCase = true) }
+        }
+        if (!args[0].equals("logs", true) || !::chatLogManager.isInitialized) return emptyList()
+        return chatLogManager.tabComplete(sender, args.drop(1))
+    }
+
     private fun handleAdminCommand(sender: CommandSender, args: Array<out String>): Boolean {
+        if (args.firstOrNull()?.equals("logs", true) == true) {
+            if (::chatLogManager.isInitialized) chatLogManager.handleCommand(sender, args.drop(1))
+            return true
+        }
         if (!sender.hasPermission("pupschat.admin")) {
-            sender.sendMessage(message("no-permission", "<color:#FF638F>Нет прав"))
+            sender.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return true
         }
         if (args.firstOrNull()?.equals("reload", true) != true) {
-            sender.sendMessage(message("reload-usage", "<gray>Использование: /pupschat reload"))
+            sender.sendMessage(message("reload-usage", "<gray>Использование: /pupschat (reload/logs)"))
             return true
         }
 
@@ -208,6 +237,7 @@ class PupsChat : JavaPlugin() {
         announcementManager.reload()
         hintManager.loadConfig()
         autoMessageManager.loadConfig()
+        chatLogManager.reload()
         val chatFormatReloaded = chatListener.loadConfig()
         when {
             !toxicityReloaded -> {
@@ -237,7 +267,7 @@ class PupsChat : JavaPlugin() {
 
     private fun handleFilterUnmuteCommand(sender: CommandSender, args: Array<out String>): Boolean {
         if (!sender.hasPermission("pupschat.unmutef")) {
-            sender.sendMessage(message("no-permission", "<color:#FF638F>Нет прав"))
+            sender.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return true
         }
         if (args.size != 1) {
@@ -297,7 +327,7 @@ class PupsChat : JavaPlugin() {
 
     private fun handleActionBarCommand(sender: CommandSender, args: Array<out String>): Boolean {
         if (!sender.hasPermission("pupschat.acb")) {
-            sender.sendMessage(message("no-permission", "<color:#FF638F>Нет прав"))
+            sender.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return true
         }
         if (args.size < 2) {
@@ -339,7 +369,7 @@ class PupsChat : JavaPlugin() {
 
     private fun handleChatHideCommand(player: Player): Boolean {
         if (!player.hasPermission("pupschat.chat")) {
-            player.sendMessage(message("no-permission", "<color:#FF638F>Нет прав"))
+            player.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return true
         }
 
@@ -360,7 +390,7 @@ class PupsChat : JavaPlugin() {
 
     private fun handleAutoMessageCommand(player: Player): Boolean {
         if (!player.hasPermission("pupschat.automessage")) {
-            player.sendMessage(message("no-permission", "<color:#FF638F>Нет прав"))
+            player.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return true
         }
         if (practiceIntegration?.autoMessagesAvailable != true) {
@@ -395,7 +425,7 @@ class PupsChat : JavaPlugin() {
 
     private fun handleMentionsCommand(player: Player): Boolean {
         if (!player.hasPermission("pupschat.mentions")) {
-            player.sendMessage(message("no-permission", "<color:#FF638F>Нет прав"))
+            player.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return true
         }
 
@@ -419,7 +449,7 @@ class PupsChat : JavaPlugin() {
         if (output == "chat") player.sendMessage(component) else player.sendActionBar(component)
     }
 
-    private fun message(
+    internal fun message(
         key: String,
         fallback: String,
         vararg replacements: Pair<String, String>

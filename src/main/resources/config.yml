@@ -241,6 +241,22 @@ auto-message:
         default: [ "gg", "гг", "ggwp" ]
         toxic: [ "ez", "ез", "изи" ]
 
+# Команды и сообщения пишутся в logs/ без создания папки игрока до его первого действия.
+logging:
+    enabled: true
+    view-lines: 20
+    # Запись идёт пакетами в отдельном потоке. Очередь ограничена и не может бесконечно занимать память
+    flush-interval-millis: 250
+    max-entry-length: 4096
+    # latest автоматически архивируется при достижении этого размера
+    max-latest-file-megabytes: 64
+    # Старые архивы и каталоги сессий удаляются сначала. Текущая сессия не удаляется
+    max-total-megabytes: 1024
+    retention-days: 30
+    # Аргументы этих команд заменяются на <скрыто>, чтобы пароли не попадали в лог
+    sensitive-commands:
+        [ "login", "l", "register", "reg", "changepassword", "changepass", "cp" ]
+
 command-messages:
     # action-bar или chat
     player-settings-output: "action-bar"
@@ -248,7 +264,17 @@ command-messages:
     no-permission: "<color:#FF638F>Недостаточно прав"
     reload-success: "<green>Конфиг перезагружен"
     reload-failed: "<color:#FF638F>Не удалось загрузить {file}: {error}"
-    reload-usage: "<gray>Использование: /pupschat reload"
+    reload-usage: "<gray>Использование: /pupschat (reload/logs)"
+    logs-usage-view: "<gray>/pupschat logs (messages/commands) all [строк]"
+    logs-usage-player: "<gray>/pupschat logs (messages/commands) player <ник> [строк]"
+    logs-view-usage: "<gray>Использование: /pupschat logs {type} all [строк] | player <ник> [строк]"
+    logs-clear-usage: "<gray>Использование: /pupschat logs clear <старше дней>"
+    logs-read-failed: "<color:#FF638F>Не удалось прочитать логи"
+    logs-clear-failed: "<color:#FF638F>Не удалось очистить логи"
+    logs-not-found: "<gray>Подходящие логи не найдены"
+    logs-header: "<color:#FCD05C>Последние {count} {type}"
+    logs-entry: "<gray>{entry}"
+    logs-clear-success: "<green>Удалено архивов и сессий логов: {count}"
     unmutef-usage: "<gray>Использование: /unmutef <игрок>"
     unmutef-success: "<gray>Мут фильтра снят с игрока <white>{player}"
     unmutef-not-muted: "<gray>Игрок <white>{player} <gray>не находится в муте фильтра"

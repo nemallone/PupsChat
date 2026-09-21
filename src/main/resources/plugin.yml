@@ -8,8 +8,8 @@ website: https://github.com/nemallone/PupsChat
 softdepend: [PremiumVanish, Essentials, PlaceholderAPI, StrikePractice]
 commands:
   pupschat:
-    description: Перезагрузка конфигурации PupsChat
-    usage: /pupschat reload
+    description: Управление PupsChat и просмотр логов
+    usage: /pupschat (reload/logs)
     aliases: [pchat]
   mentions:
     description: Переключение уведомлений об упоминаниях
@@ -29,6 +29,12 @@ permissions:
     default: op
     children:
       pupschat.unmutef: true
+      pupschat.logs.view: true
+      pupschat.logs.clear: true
+  pupschat.logs.view:
+    default: op
+  pupschat.logs.clear:
+    default: op
   pupschat.unmutef:
     default: op
   pupschat.mentions:
