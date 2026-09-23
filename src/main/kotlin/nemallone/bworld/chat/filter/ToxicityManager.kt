@@ -45,6 +45,9 @@ internal class ToxicityManager(
     private var maxViolations = 10
 
     @Volatile
+    private var muteEnabled = true
+
+    @Volatile
     private var windowMs = 10 * 60_000L
 
     @Volatile
@@ -87,6 +90,8 @@ internal class ToxicityManager(
         }
         action = parsedAction ?: ToxicityAction.WARN
         maxViolations = config.getInt("toxicity.max-violations", 10).coerceAtLeast(1)
+        muteEnabled = config.getBoolean("toxicity.mute-enabled", true)
+        if (!muteEnabled) violations.clear()
         windowMs = config.getLong("toxicity.window-minutes", 10).coerceAtLeast(1) * 60_000L
 
         val configuredWarnings = config.getStringList("toxicity.messages")
@@ -151,24 +156,24 @@ internal class ToxicityManager(
         return true
     }
 
-    fun checkMessage(player: Player, message: String): FilterResult {
+    fun checkMessage(player: Player, message: String, aiMatch: Boolean = false): FilterResult {
         if (!enabled || player.hasPermission("pupschat.bypass.toxicity")) {
             return FilterResult.Allowed
         }
-        if (!lexiconStore.containsToxicity(message)) return FilterResult.Allowed
+        if (!aiMatch && !lexiconStore.containsToxicity(message)) return FilterResult.Allowed
 
-        val shouldMute = addViolation(player.uniqueId)
+        val shouldMute = muteEnabled && addViolation(player.uniqueId)
         val warning = warningMessages.random()
 
         Bukkit.getScheduler().runTaskLater(plugin, Runnable {
             if (!player.isOnline) {
-                if (shouldMute) muteManager.mute(player)
+                if (shouldMute && muteEnabled) muteManager.mute(player)
                 return@Runnable
             }
 
-            player.sendMessage(warning)
+            plugin.feedback("filters.toxicity", player, warning)
 
-            if (shouldMute) muteManager.mute(player)
+            if (shouldMute && muteEnabled) muteManager.mute(player)
         }, 2L)
 
         return if (action == ToxicityAction.BLOCK) {

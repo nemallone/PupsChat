@@ -8,10 +8,11 @@ internal class ToxicityLexicon private constructor(
     val exactWords: Set<String>,
     val stems: List<String>,
     val phrasesByFirstToken: Map<String, List<List<String>>>,
-    val allowedWords: Set<String>
+    val allowedWords: Set<String>,
+    val allowedPhrasesByFirstToken: Map<String, List<List<String>>>
 ) {
     companion object {
-        fun empty() = ToxicityLexicon(emptySet(), emptyList(), emptyMap(), emptySet())
+        fun empty() = ToxicityLexicon(emptySet(), emptyList(), emptyMap(), emptySet(), emptyMap())
 
         fun load(
             rules: InputStream,
@@ -29,13 +30,22 @@ internal class ToxicityLexicon private constructor(
             }
 
             val allowed = LinkedHashSet<String>()
-            allowedWords.forEach { addSingleToken(it, "allowed-words", allowed, warning) }
+            val allowedPhrases = LinkedHashSet<List<String>>()
+            allowedWords.forEach { raw ->
+                val tokens = ToxicityMatcher.tokenize(raw)
+                when (tokens.size) {
+                    0 -> warning("Пустая запись в allowed-words")
+                    1 -> allowed.add(tokens[0])
+                    else -> allowedPhrases.add(tokens.toList())
+                }
+            }
 
             return ToxicityLexicon(
                 exactWords = exact.toSet(),
                 stems = stems.sortedByDescending(String::length),
                 phrasesByFirstToken = phrases.groupBy { it.first() },
-                allowedWords = allowed.toSet()
+                allowedWords = allowed.toSet(),
+                allowedPhrasesByFirstToken = allowedPhrases.groupBy { it.first() }
             )
         }
 
@@ -103,13 +113,14 @@ internal object ToxicityMatcher {
         val tokens = tokenization.tokens
         if (tokens.isEmpty()) return false
 
-        if (matchesPhrase(tokens, lexicon.phrasesByFirstToken)) return true
+        val allowedTokens = markAllowedPhrases(tokens, lexicon.allowedPhrasesByFirstToken)
+        if (matchesPhrase(tokens, lexicon.phrasesByFirstToken, allowedTokens)) return true
 
-        for (token in tokens) {
-            if (matchesWord(token, lexicon)) return true
+        for (index in tokens.indices) {
+            if (!allowedTokens[index] && matchesWord(tokens[index], lexicon)) return true
         }
 
-        return matchesSeparatedFragments(tokenization, lexicon)
+        return matchesSeparatedFragments(tokenization, lexicon, allowedTokens)
     }
 
     internal fun tokenize(input: String): List<String> {
@@ -194,37 +205,51 @@ internal object ToxicityMatcher {
 
     private fun matchesPhrase(
         tokens: List<String>,
-        phrasesByFirstToken: Map<String, List<List<String>>>
+        phrasesByFirstToken: Map<String, List<List<String>>>,
+        allowedTokens: BooleanArray
     ): Boolean {
         for (start in tokens.indices) {
             val phrases = phrasesByFirstToken[tokens[start]] ?: continue
             for (phrase in phrases) {
-                if (start + phrase.size > tokens.size) continue
-                var matches = true
-                for (phraseIndex in 1 until phrase.size) {
-                    if (tokens[start + phraseIndex] != phrase[phraseIndex]) {
-                        matches = false
-                        break
-                    }
-                }
-                if (matches) return true
+                if (matchesAt(tokens, start, phrase) && phrase.indices.any { !allowedTokens[start + it] }) return true
             }
         }
         return false
     }
 
+    private fun markAllowedPhrases(
+        tokens: List<String>,
+        phrasesByFirstToken: Map<String, List<List<String>>>
+    ): BooleanArray {
+        val allowed = BooleanArray(tokens.size)
+        for (start in tokens.indices) {
+            val phrases = phrasesByFirstToken[tokens[start]] ?: continue
+            for (phrase in phrases) {
+                if (matchesAt(tokens, start, phrase)) allowed.fill(true, start, start + phrase.size)
+            }
+        }
+        return allowed
+    }
+
+    private fun matchesAt(tokens: List<String>, start: Int, phrase: List<String>): Boolean =
+        start + phrase.size <= tokens.size && phrase.indices.all { tokens[start + it] == phrase[it] }
+
     private fun matchesSeparatedFragments(
         tokenization: Tokenization,
-        lexicon: ToxicityLexicon
+        lexicon: ToxicityLexicon,
+        allowedTokens: BooleanArray
     ): Boolean {
         val tokens = tokenization.tokens
         for (start in tokens.indices) {
+            if (allowedTokens[start]) continue
             val candidate = StringBuilder()
             var punctuationSeen = false
             var allSingleCharacters = true
 
             val endExclusive = minOf(tokens.size, start + MAX_JOINED_FRAGMENTS)
             for (end in start until endExclusive) {
+                // Разрешённый фрагмент не соединяет слова по обе стороны от него
+                if (allowedTokens[end]) break
                 val token = tokens[end]
                 val codePoints = token.codePointCount(0, token.length)
                 if (codePoints > MAX_FRAGMENT_LENGTH) break

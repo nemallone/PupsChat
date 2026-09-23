@@ -1,6 +1,15 @@
 package nemallone.bworld.chat.listeners
 
 import io.papermc.paper.event.player.AsyncChatEvent
+import io.papermc.paper.chat.ChatRenderer
+import nemallone.bworld.chat.api.ChatChannel
+import nemallone.bworld.chat.api.PupsChatMessageEvent
+import nemallone.bworld.chat.channels.ChannelSettings
+import nemallone.bworld.chat.channels.ChannelPolicy
+import nemallone.bworld.chat.channels.ChannelRejection
+import nemallone.bworld.chat.channels.ChatPosition
+import nemallone.bworld.chat.channels.BoundedChatText
+import nemallone.bworld.chat.channels.ChatAuditRecord
 import nemallone.bworld.chat.ChatFormatter
 import nemallone.bworld.chat.PupsChat
 import nemallone.bworld.chat.filter.FilterManager
@@ -8,6 +17,8 @@ import nemallone.bworld.chat.filter.FilterResult
 import nemallone.bworld.chat.filter.FloodManager
 import nemallone.bworld.chat.filter.MuteManager
 import nemallone.bworld.chat.filter.ToxicityManager
+import nemallone.bworld.chat.filter.ai.AiFilterManager
+import nemallone.bworld.chat.filter.ai.FilterCategory
 import nemallone.bworld.chat.integrations.VanishIntegration
 import nemallone.bworld.chat.messaging.AutoMessageManager
 import nemallone.bworld.chat.messaging.ChatHideManager
@@ -17,8 +28,8 @@ import net.kyori.adventure.audience.Audience
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.TextComponent
 import net.kyori.adventure.text.TextReplacementConfig
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
 import org.bukkit.Bukkit
 import org.bukkit.Statistic
 import org.bukkit.configuration.file.FileConfiguration
@@ -43,6 +54,7 @@ internal class ChatListener(
     private val floodManager: FloodManager,
     private val muteManager: MuteManager,
     private val toxicityManager: ToxicityManager,
+    private val aiFilter: AiFilterManager,
     private val chatHideManager: ChatHideManager,
     private val hintManager: HintManager,
     private val autoMessageManager: AutoMessageManager,
@@ -64,11 +76,11 @@ internal class ChatListener(
 
     private data class Settings(
         val globalMentionPattern: Pattern,
-        val leadingPrefixPattern: Pattern?,
+        val channels: ChannelSettings,
+        val maxMessageLength: Int,
         val commandParser: ChatCommandParser
     )
 
-    private val plainSerializer = PlainTextComponentSerializer.plainText()
     private val chatFormatter = ChatFormatter(plugin)
     private val vanishIntegration = VanishIntegration(plugin)
 
@@ -79,6 +91,23 @@ internal class ChatListener(
     private var mentionSound: Sound? = null
 
     private val mentionPatterns = ConcurrentHashMap<String, Pattern>()
+    private val pendingAudits = ConcurrentHashMap<AsyncChatEvent, ChatAuditRecord>()
+
+    @Volatile
+    private var closed = false
+
+    private enum class DeliveryResult { SENT, REJECTED, CANCELLED }
+
+    private data class PreparedMessage(
+        val result: DeliveryResult,
+        val audit: ChatAuditRecord,
+        val message: Component? = null,
+        val recipients: Set<Audience> = emptySet(),
+        val renderer: ChatRenderer? = null,
+        val settingsSnapshot: Settings? = null,
+        val channel: ChatChannel? = null,
+        val autoMessage: Boolean = false
+    )
 
     init {
         loadConfig()
@@ -99,17 +128,19 @@ internal class ChatListener(
                 "(?i)@(?:${globalAliases.joinToString("|") { Pattern.quote(it) }})(?![\\p{L}\\p{N}_])"
             )
         }
-        val leadingPrefix = config.getString("chat-processing.remove-leading-prefix", "!") ?: "!"
-
-        val leadingPrefixPattern = if (leadingPrefix.isEmpty()) {
-            null
-        } else {
-            Pattern.compile("^${Pattern.quote(leadingPrefix)}\\s*")
+        val channels: ChannelSettings
+        val maxMessageLength: Int
+        try {
+            channels = ChannelSettings.read(config)
+            maxMessageLength = BoundedChatText.readMaximum(config)
+        } catch (exception: IllegalArgumentException) {
+            plugin.logger.warning("Некорректные настройки каналов, используются предыдущие: ${exception.message}")
+            return false
         }
-
-        settings = Settings(
+        val next = Settings(
             globalMentionPattern = globalPattern,
-            leadingPrefixPattern = leadingPrefixPattern,
+            channels = channels,
+            maxMessageLength = maxMessageLength,
             commandParser = ChatCommandParser(
                 targetedPrivateCommands = configuredSet(
                     config,
@@ -143,10 +174,11 @@ internal class ChatListener(
                 )
             )
         )
-        val chatFormatLoaded = chatFormatter.loadConfig()
+        if (!chatFormatter.loadConfig()) return false
+        settings = next
         vanishIntegration.loadConfig()
         updateMentionSound()
-        return chatFormatLoaded
+        return true
     }
 
     private fun updateMentionSound() {
@@ -166,16 +198,11 @@ internal class ChatListener(
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     fun onChat(event: AsyncChatEvent) {
-        if (!event.isAsynchronous || Bukkit.isPrimaryThread()) {
-            processChatSafely(event)
-            return
-        }
-
         try {
-            // форматирование и интеграции ниже используют апи, привязанные к потоку сервера
-            Bukkit.getScheduler().callSyncMethod(plugin) {
-                processChat(event)
-            }.get()
+            onServerThread {
+                val prepared = prepareChat(event) ?: return@onServerThread
+                finishChat(event, prepared)
+            }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             event.isCancelled = true
@@ -202,97 +229,244 @@ internal class ChatListener(
         }
     }
 
-    private fun processChatSafely(event: AsyncChatEvent) {
-        try {
-            processChat(event)
-        } catch (exception: RuntimeException) {
+    private fun <T> onServerThread(action: () -> T): T =
+        if (Bukkit.isPrimaryThread()) action() else Bukkit.getScheduler().callSyncMethod(plugin, action).get()
+
+    private fun prepareChat(event: AsyncChatEvent): PreparedMessage? {
+        if (event.isCancelled || closed) return null
+        val currentSettings = settings
+        val original = BoundedChatText.read(event.originalMessage(), currentSettings.maxMessageLength)
+        val current = if (event.message() === event.originalMessage()) original
+            else BoundedChatText.read(event.message(), currentSettings.maxMessageLength)
+        val originalChannel = ChatAuditRecord.classify(original, currentSettings.channels)
+        val currentChannel = ChatAuditRecord.classify(current, currentSettings.channels)
+        val audit = ChatAuditRecord(
+            event.player.uniqueId,
+            if (originalChannel == ChatChannel.STAFF) originalChannel else currentChannel,
+            original.text,
+            current.text,
+            "processing-failed"
+        )
+        pendingAudits[event] = audit
+        if (originalChannel == ChatChannel.STAFF && currentChannel != ChatChannel.STAFF) {
+            pendingAudits[event] = audit.copy(outcome = "channel-changed-externally")
+            plugin.feedback("staff-route-failed", event.player, plugin.message("staff-route-failed", "<color:#FF638F>Не удалось отправить сообщение в стафф-чат"))
             event.isCancelled = true
-            plugin.logger.log(Level.SEVERE, "Ошибка при обработке сообщения", exception)
+            return null
         }
+        if (!current.complete) {
+            pendingAudits[event] = audit.copy(outcome = "message-too-long")
+            rejectLongMessage(event.player)
+            event.isCancelled = true
+            return null
+        }
+        val prepared = prepareMessage(event.player, event.message(), event.viewers().toSet(), current.text, currentSettings, audit)
+        pendingAudits[event] = prepared.audit
+        if (prepared.result != DeliveryResult.SENT) {
+            event.isCancelled = true
+            return null
+        }
+        return prepared
     }
 
-    private fun processChat(event: AsyncChatEvent) {
-        val sender = event.player
-        val currentSettings = settings
-        val originalMessage = plainSerializer.serialize(event.message())
-
-        if (muteManager.rejectIfMuted(sender)) {
+    private fun finishChat(event: AsyncChatEvent, draft: PreparedMessage) {
+        if (closed || event.isCancelled || !event.player.isOnline || Bukkit.getPlayer(event.player.uniqueId) !== event.player) {
+            event.isCancelled = true
+            pendingAudits[event] = draft.audit.copy(outcome = "delivery-cancelled")
+            return
+        }
+        if (settings !== draft.settingsSnapshot || muteManager.rejectIfMuted(event.player)) {
+            event.isCancelled = true
+            pendingAudits[event] = draft.audit.copy(outcome = "settings-or-mute-changed")
+            return
+        }
+        val prepared = finishMessage(event.player, draft)
+        pendingAudits[event] = prepared.audit
+        if (prepared.result != DeliveryResult.SENT) {
             event.isCancelled = true
             return
         }
+        event.viewers().clear()
+        event.viewers().addAll(prepared.recipients)
+        event.message(requireNotNull(prepared.message))
+        prepared.renderer?.let(event::renderer)
+    }
 
-        var plainMessage = originalMessage
-        var messageComponent = event.message()
-
-        val prefixPattern = currentSettings.leadingPrefixPattern
-        if (prefixPattern != null && prefixPattern.matcher(plainMessage).find()) {
-            plainMessage = prefixPattern.matcher(plainMessage).replaceFirst("")
-            messageComponent = messageComponent.replaceText(
-                TextReplacementConfig.builder()
-                    .match(prefixPattern)
-                    .replacement("")
-                    .once()
-                    .build()
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = false)
+    fun auditChat(event: AsyncChatEvent) {
+        val prepared = pendingAudits.remove(event)
+        if (closed) return
+        val currentSettings = settings
+        val audit = prepared ?: run {
+            val original = BoundedChatText.read(event.originalMessage(), currentSettings.maxMessageLength)
+            ChatAuditRecord(
+                event.player.uniqueId,
+                ChatAuditRecord.classify(original, currentSettings.channels),
+                original.text,
+                original.text,
+                if (event.isCancelled) ChatAuditRecord.CANCELLED_EXTERNAL else "not-processed-by-pupschat"
             )
         }
+        val cancelled = event.isCancelled
+        plugin.recordRouted(audit.senderId, audit.channel.id, audit.originalText, audit.finalOutcome(cancelled))
+    }
 
-        if (plainMessage.trim().isEmpty()) {
-            event.isCancelled = true
-            return
+    fun close() {
+        closed = true
+        pendingAudits.clear()
+    }
+
+    private fun rejectLongMessage(player: Player) {
+        plugin.feedback("message-too-long", player, plugin.message("message-too-long", "<color:#FF638F>Сообщение слишком длинное"))
+    }
+
+    private fun prepareMessage(
+        sender: Player,
+        originalComponent: Component,
+        originalViewers: Set<Audience>,
+        originalText: String,
+        currentSettings: Settings,
+        originalAudit: ChatAuditRecord
+    ): PreparedMessage {
+        check(Bukkit.isPrimaryThread()) { "Обработка каналов требует основной поток сервера" }
+        val channels = currentSettings.channels
+        val selected = ChannelPolicy.select(
+            originalText, channels, sender.hasPermission(channels.staffSendPermission)
+        )
+        var plainMessage = selected.text
+        val removedCharacters = originalText.length - plainMessage.length
+        var messageComponent = when {
+            !selected.consumedPrefix -> originalComponent
+            originalComponent is TextComponent && originalComponent.content().length >= removedCharacters ->
+                originalComponent.content(originalComponent.content().substring(removedCharacters))
+            else -> Component.text(plainMessage).style(originalComponent.style())
         }
+        val channel = selected.channel
+        val auditChannel = if (originalAudit.channel == ChatChannel.STAFF) ChatChannel.STAFF else channel
+
+        fun reject(outcome: String, result: DeliveryResult = DeliveryResult.REJECTED): PreparedMessage {
+            return PreparedMessage(result, originalAudit.copy(channel = auditChannel, processedText = plainMessage, outcome = outcome))
+        }
+
+        if (selected.rejection != null) {
+            val feedback = when (selected.rejection) {
+                ChannelRejection.NO_PERMISSION -> "no-permission" to "<color:#FF638F>Недостаточно прав"
+                ChannelRejection.EMPTY -> "empty-message" to "<gray>Введите сообщение"
+            }
+            plugin.feedback(feedback.first, sender, plugin.message(feedback.first, feedback.second))
+            return reject(selected.rejection.name.lowercase(Locale.ROOT))
+        }
+        if (muteManager.rejectIfMuted(sender)) return reject("muted")
 
         val autoMessage = autoMessageManager.consumeAutoMessage(sender.uniqueId, plainMessage)
         if (!autoMessage) {
-            when (val filterResult = applyMessageFilters(sender, plainMessage, null)) {
-                FilterResult.Blocked -> {
-                    event.isCancelled = true
-                    return
-                }
+            when (val filterResult = applyMessageFilters(sender, plainMessage, if (channel == ChatChannel.STAFF) "staff" else null, commitHistory = false)) {
+                FilterResult.Blocked -> return reject("filter")
                 is FilterResult.Modified -> {
                     plainMessage = filterResult.message
                     messageComponent = Component.text(plainMessage)
                 }
                 FilterResult.Allowed -> Unit
             }
-
-            if (floodManager.checkFlood(sender)) {
-                event.isCancelled = true
-                return
-            }
-
-            hintManager.checkHints(sender, plainMessage)
+            if (floodManager.checkFlood(sender)) return reject("flood")
+        }
+        val aiCategory = if (autoMessage || channel == ChatChannel.STAFF || sender.hasPermission("pupschat.bypass.ai")) null
+            else aiFilter.classify(plainMessage)
+        if (toxicityManager.checkMessage(sender, plainMessage, aiCategory == FilterCategory.TARGETED_INSULT) == FilterResult.Blocked) {
+            return reject("toxicity")
         }
 
-        if (toxicityManager.checkMessage(sender, plainMessage) == FilterResult.Blocked) {
-            event.isCancelled = true
-            return
-        }
+        return PreparedMessage(
+            DeliveryResult.SENT,
+            originalAudit.copy(channel = auditChannel, processedText = plainMessage, outcome = "pending-delivery"),
+            messageComponent, originalViewers, settingsSnapshot = currentSettings, channel = channel,
+            autoMessage = autoMessage,
+        )
+    }
 
-        val lowercaseMessage = plainMessage.lowercase(Locale.ROOT)
+    private fun finishMessage(sender: Player, draft: PreparedMessage): PreparedMessage {
+        val currentSettings = requireNotNull(draft.settingsSnapshot)
+        val channels = currentSettings.channels
+        val channel = requireNotNull(draft.channel)
+        val plainMessage = draft.audit.processedText
+        var messageComponent = requireNotNull(draft.message)
+        fun reject(outcome: String, result: DeliveryResult = DeliveryResult.REJECTED) =
+            PreparedMessage(result, draft.audit.copy(outcome = outcome))
+        if (channel == ChatChannel.STAFF && !sender.hasPermission(channels.staffSendPermission)) return reject("no-permission")
+        val recipients = selectRecipients(sender, channel, channels, draft.recipients)
+        recipients.removeIf { viewer ->
+            channel != ChatChannel.STAFF && viewer is Player && viewer !== sender && chatHideManager.shouldHide(viewer, sender)
+        }
+        val allowed = recipients.toSet()
+        val routedEvent = PupsChatMessageEvent(sender, channel, messageComponent, recipients)
+        Bukkit.getPluginManager().callEvent(routedEvent)
+        if (routedEvent.isCancelled) return reject("cancelled", DeliveryResult.CANCELLED)
+        if (!draft.autoMessage) filterManager.rememberMessage(sender.uniqueId, plainMessage)
+        if (!draft.autoMessage && channel != ChatChannel.STAFF) hintManager.checkHints(sender, plainMessage)
+        // Обработчики события могут убрать получателей, но не обойти ограничения канала
+        recipients.retainAll(allowed)
+        recipients.retainAll(selectRecipients(sender, channel, channels, recipients))
+        recipients.removeIf { viewer ->
+            channel != ChatChannel.STAFF && viewer is Player && viewer !== sender && chatHideManager.shouldHide(viewer, sender)
+        }
+        recipients.add(sender)
 
         messageComponent = handleMentions(
-            sender,
-            lowercaseMessage,
-            messageComponent,
-            currentSettings,
-            event.viewers()
+            sender, plainMessage.lowercase(Locale.ROOT), messageComponent, currentSettings, recipients, channel
         )
+        val renderer = chatFormatter.renderer(sender, messageComponent, channel, recipients)
+        if (channel == ChatChannel.LOCAL && recipients.none {
+                it is Player && it !== sender && !vanishIntegration.isVanished(it)
+            }) {
+            plugin.feedback("local-no-audience", sender, plugin.message("local-no-audience", "<gray>Рядом нет игроков, которые увидят сообщение"))
+        }
+        val audit = draft.audit.copy(
+            processedText = plainMessage,
+            outcome = ChatAuditRecord.ACCEPTED,
+        )
+        return PreparedMessage(DeliveryResult.SENT, audit, messageComponent, recipients.toSet(), renderer)
+    }
 
-        event.message(messageComponent)
-
-        chatFormatter.format(event, sender, messageComponent)
-
-        applyChatHiding(event, sender)
+    private fun selectRecipients(
+        sender: Player,
+        channel: ChatChannel,
+        settings: ChannelSettings,
+        original: Set<Audience>
+    ): MutableSet<Audience> {
+        val origin = if (channel == ChatChannel.LOCAL) sender.location.let {
+            ChatPosition(sender.world.uid, it.x, it.y, it.z)
+        } else null
+        val result = original.filterTo(LinkedHashSet()) { viewer ->
+            when {
+                viewer === sender -> true
+                viewer === Bukkit.getConsoleSender() -> settings.consoleEnabled(channel)
+                viewer !is Player -> channel == ChatChannel.GLOBAL
+                !viewer.isOnline -> false
+                channel == ChatChannel.STAFF -> viewer.hasPermission(settings.staffReadPermission)
+                channel == ChatChannel.LOCAL -> {
+                    val location = viewer.location
+                    ChannelPolicy.withinRadius(requireNotNull(origin), ChatPosition(viewer.world.uid, location.x, location.y, location.z), settings.localRadius)
+                }
+                else -> true
+            }
+        }
+        result.add(sender)
+        return result
     }
 
     private fun applyMessageFilters(
         player: Player,
         message: String,
-        context: String?
+        context: String?,
+        commitHistory: Boolean = true,
     ): FilterResult {
         val replacedMessage = filterManager.applyReplacements(message)
+        if (replacedMessage.length > settings.maxMessageLength) {
+            rejectLongMessage(player)
+            return FilterResult.Blocked
+        }
         return when (
-            val result = filterManager.filterMessage(player, replacedMessage, context)
+            val result = filterManager.filterMessage(player, replacedMessage, context, commitHistory)
         ) {
             FilterResult.Blocked -> FilterResult.Blocked
             is FilterResult.Modified -> result
@@ -304,33 +478,24 @@ internal class ChatListener(
         }
     }
 
-    private fun applyChatHiding(
-        event: AsyncChatEvent,
-        sender: Player
-    ) {
-        event.viewers().removeIf { viewer ->
-            if (viewer !is Player || viewer === sender) return@removeIf false
-            chatHideManager.shouldHide(viewer, sender)
-        }
-    }
-
     private fun handleMentions(
         sender: Player,
         lowerMessage: String,
         originalMessage: Component,
         settings: Settings,
-        viewers: Set<Audience>
+        viewers: Set<Audience>,
+        channel: ChatChannel
     ): Component {
         var message = originalMessage
 
         if (sender.hasPermission("pupschat.globalmentions") &&
             settings.globalMentionPattern.matcher(lowerMessage).find()) {
-            for (target in Bukkit.getOnlinePlayers()) {
-                if (target == sender) continue
+            for (target in viewers) {
+                if (target !is Player || target == sender) continue
                 if (target !in viewers) continue
                 if (vanishIntegration.isVanished(target)) continue
                 if (!mentionsManager.isMentionsEnabled(target.uniqueId)) continue
-                if (chatHideManager.shouldHide(target, sender)) continue
+                if (channel != ChatChannel.STAFF && chatHideManager.shouldHide(target, sender)) continue
                 notifyMention(target, sender.name)
             }
 
@@ -348,7 +513,7 @@ internal class ChatListener(
             val token = tokens.group().removePrefix("@")
             val exactName = filterManager.findExactPlayerName(token) ?: continue
             val target = Bukkit.getPlayerExact(exactName) ?: continue
-            if (target != sender && !vanishIntegration.isVanished(target)) {
+            if (target != sender && target in viewers && !vanishIntegration.isVanished(target)) {
                 matchedTargets.add(target)
             }
         }
@@ -358,7 +523,7 @@ internal class ChatListener(
 
             if (target in viewers &&
                 mentionsManager.isMentionsEnabled(target.uniqueId) &&
-                !chatHideManager.shouldHide(target, sender)) {
+                (channel == ChatChannel.STAFF || !chatHideManager.shouldHide(target, sender))) {
                 notifyMention(target, sender.name)
             }
 
@@ -390,7 +555,13 @@ internal class ChatListener(
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     fun onCommand(event: PlayerCommandPreprocessEvent) {
         val player = event.player
-        val command = settings.commandParser.parse(event.message) ?: return
+        val currentSettings = settings
+        val command = currentSettings.commandParser.parse(event.message) ?: return
+        if (event.message.length - command.messageStart > currentSettings.maxMessageLength) {
+            rejectLongMessage(player)
+            event.isCancelled = true
+            return
+        }
 
         if (muteManager.rejectIfMuted(player)) {
             event.isCancelled = true
@@ -443,7 +614,8 @@ internal class ChatListener(
 
     private fun defaultSettings() = Settings(
         globalMentionPattern = NEVER_MATCH,
-        leadingPrefixPattern = Pattern.compile("^!\\s*"),
+        channels = ChannelSettings(),
+        maxMessageLength = BoundedChatText.DEFAULT_MAX_LENGTH,
         commandParser = ChatCommandParser(
             DEFAULT_TARGETED_PRIVATE_MESSAGE_COMMANDS,
             DEFAULT_REPLY_PRIVATE_MESSAGE_COMMANDS,

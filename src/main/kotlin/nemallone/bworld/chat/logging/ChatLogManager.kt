@@ -1,8 +1,6 @@
 package nemallone.bworld.chat.logging
 
-import io.papermc.paper.event.player.AsyncChatEvent
 import nemallone.bworld.chat.PupsChat
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
 import org.bukkit.Bukkit
 import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
@@ -21,7 +19,6 @@ internal class ChatLogManager(private val plugin: PupsChat) : Listener {
 
     private data class PlayerIdentity(val name: String, val ip: String)
 
-    private val plainSerializer = PlainTextComponentSerializer.plainText()
     private val identities = ConcurrentHashMap<UUID, PlayerIdentity>()
     private val store: ChatLogStore
 
@@ -54,11 +51,10 @@ internal class ChatLogManager(private val plugin: PupsChat) : Listener {
         store.reload(options)
     }
 
-    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
-    fun onChat(event: AsyncChatEvent) {
+    fun recordRouted(playerId: UUID, channelId: String, text: String, outcome: String) {
         if (!enabled) return
-        val identity = identities[event.player.uniqueId] ?: return
-        record(ChatLogType.MESSAGES, identity, plainSerializer.serialize(event.originalMessage()))
+        val identity = identities[playerId] ?: return
+        record(routedLogType(channelId), identity, text, channelId, outcome)
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
@@ -86,7 +82,13 @@ internal class ChatLogManager(private val plugin: PupsChat) : Listener {
         )
     }
 
-    private fun record(type: ChatLogType, identity: PlayerIdentity, rawText: String) {
+    private fun record(
+        type: ChatLogType,
+        identity: PlayerIdentity,
+        rawText: String,
+        channelId: String? = null,
+        outcome: String? = null,
+    ) {
         store.offer(
             ChatLogEntry(
                 type,
@@ -94,29 +96,34 @@ internal class ChatLogManager(private val plugin: PupsChat) : Listener {
                 identity.ip,
                 rawText.take(maxEntryLength),
                 System.currentTimeMillis(),
+                channelId,
+                outcome,
             ),
         )
     }
 
     fun handleCommand(sender: CommandSender, args: List<String>) {
         val canView = sender.hasPermission("pupschat.logs.view")
+        val canViewStaff = sender.hasPermission("pupschat.logs.staff")
         val canClear = sender.hasPermission("pupschat.logs.clear")
-        if (!canView && !canClear) {
+        if (!canView && !canViewStaff && !canClear) {
             sender.sendMessage(plugin.message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return
         }
         when (args.firstOrNull()?.lowercase(Locale.ROOT)) {
             "messages" -> show(sender, ChatLogType.MESSAGES, args.drop(1))
             "commands" -> show(sender, ChatLogType.COMMANDS, args.drop(1))
+            "staff" -> show(sender, ChatLogType.STAFF, args.drop(1))
             "clear" -> clear(sender, args.drop(1))
-            else -> usage(sender, canView, canClear)
+            else -> usage(sender, canView, canViewStaff, canClear)
         }
     }
 
     fun tabComplete(sender: CommandSender, args: List<String>): List<String> {
         val canView = sender.hasPermission("pupschat.logs.view")
+        val canViewStaff = sender.hasPermission("pupschat.logs.staff")
         val playerNames = if (
-            canView && args.size == 3 &&
+            args.size == 3 && canReadLogType(args[0], canView, canViewStaff) &&
             args[0].lowercase(Locale.ROOT) in VIEW_TYPES &&
             args[1].equals("player", true)
         ) {
@@ -129,11 +136,12 @@ internal class ChatLogManager(private val plugin: PupsChat) : Listener {
             canView,
             sender.hasPermission("pupschat.logs.clear"),
             playerNames,
+            canViewStaff,
         )
     }
 
     private fun show(sender: CommandSender, type: ChatLogType, args: List<String>) {
-        if (!sender.hasPermission("pupschat.logs.view")) {
+        if (!canRead(sender, type)) {
             sender.sendMessage(plugin.message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return
         }
@@ -144,6 +152,7 @@ internal class ChatLogManager(private val plugin: PupsChat) : Listener {
         }
         store.readLatest(type, request.first, request.second).whenComplete { lines, failure ->
             runSync {
+                if (!canRead(sender, type) || sender is Player && !sender.isOnline) return@runSync
                 if (failure != null) {
                     sender.sendMessage(plugin.message("logs-read-failed", "<color:#FF638F>Не удалось прочитать логи"))
                 } else if (lines.isEmpty()) {
@@ -213,10 +222,13 @@ internal class ChatLogManager(private val plugin: PupsChat) : Listener {
         }
     }
 
-    private fun usage(sender: CommandSender, canView: Boolean, canClear: Boolean) {
+    private fun usage(sender: CommandSender, canView: Boolean, canViewStaff: Boolean, canClear: Boolean) {
         if (canView) {
             sender.sendMessage(plugin.message("logs-usage-view", "<gray>/pupschat logs (messages/commands) all [строк]"))
             sender.sendMessage(plugin.message("logs-usage-player", "<gray>/pupschat logs (messages/commands) player <ник> [строк]"))
+        }
+        if (canViewStaff) {
+            sender.sendMessage(plugin.message("logs-usage-staff", "<gray>/pupschat logs staff all [строк] | player <ник> [строк]"))
         }
         if (canClear) {
             sender.sendMessage(plugin.message("logs-clear-usage", "<gray>/pupschat logs clear <старше дней>"))
@@ -232,6 +244,9 @@ internal class ChatLogManager(private val plugin: PupsChat) : Listener {
             ),
         )
     }
+
+    private fun canRead(sender: CommandSender, type: ChatLogType): Boolean =
+        sender.hasPermission(if (type == ChatLogType.STAFF) "pupschat.logs.staff" else "pupschat.logs.view")
 
     private fun runSync(block: () -> Unit) {
         if (!plugin.isEnabled) return
@@ -298,6 +313,7 @@ internal fun logTabCompletions(
     canView: Boolean,
     canClear: Boolean,
     playerNames: List<String>,
+    canViewStaff: Boolean = false,
 ): List<String> {
     if (args.isEmpty()) return emptyList()
     val candidates = when (args.size) {
@@ -306,22 +322,24 @@ internal fun logTabCompletions(
                 add("messages")
                 add("commands")
             }
+            if (canViewStaff) add("staff")
             if (canClear) add("clear")
         }
         2 -> when (args[0].lowercase(Locale.ROOT)) {
             "messages", "commands" -> if (canView) listOf("all", "player") else emptyList()
+            "staff" -> if (canViewStaff) listOf("all", "player") else emptyList()
             "clear" -> if (canClear) listOf("7", "30", "90") else emptyList()
             else -> emptyList()
         }
         3 -> when {
-            !canView -> emptyList()
+            !canReadLogType(args[0], canView, canViewStaff) -> emptyList()
             args[0].lowercase(Locale.ROOT) !in VIEW_TYPES -> emptyList()
             args[1].equals("player", true) -> playerNames
             args[1].equals("all", true) -> VIEW_LINE_SUGGESTIONS
             else -> emptyList()
         }
         4 -> if (
-            canView && args[0].lowercase(Locale.ROOT) in VIEW_TYPES && args[1].equals("player", true)
+            canReadLogType(args[0], canView, canViewStaff) && args[1].equals("player", true)
         ) {
             VIEW_LINE_SUGGESTIONS
         } else {
@@ -334,4 +352,11 @@ internal fun logTabCompletions(
 }
 
 private val VIEW_LINE_SUGGESTIONS = listOf("10", "20", "50", "100")
-private val VIEW_TYPES = setOf("messages", "commands")
+internal fun canReadLogType(type: String, canView: Boolean, canViewStaff: Boolean): Boolean =
+    when (type.lowercase(Locale.ROOT)) {
+        "messages", "commands" -> canView
+        "staff" -> canViewStaff
+        else -> false
+    }
+
+private val VIEW_TYPES = setOf("messages", "commands", "staff")

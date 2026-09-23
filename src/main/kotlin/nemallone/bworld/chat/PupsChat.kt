@@ -1,5 +1,7 @@
 package nemallone.bworld.chat
 
+import nemallone.bworld.chat.channels.ChannelSettings
+import nemallone.bworld.chat.channels.BoundedChatText
 import nemallone.bworld.chat.filter.FilterManager
 import nemallone.bworld.chat.filter.FloodManager
 import nemallone.bworld.chat.filter.MuteManager
@@ -14,6 +16,10 @@ import nemallone.bworld.chat.messaging.AutoMessageManager
 import nemallone.bworld.chat.messaging.ChatHideManager
 import nemallone.bworld.chat.messaging.HintManager
 import nemallone.bworld.chat.messaging.MentionsManager
+import nemallone.bworld.chat.messaging.FeedbackService
+import nemallone.bworld.chat.messaging.FeedbackSettings
+import nemallone.bworld.chat.filter.ai.AiFilterManager
+import nemallone.bworld.chat.filter.ai.AiFilterSettings
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.minimessage.MiniMessage
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder
@@ -28,6 +34,7 @@ import java.io.File
 import java.io.IOException
 import java.util.HashSet
 import java.util.Locale
+import java.util.UUID
 import java.util.logging.Level
 
 class PupsChat : JavaPlugin() {
@@ -47,6 +54,8 @@ class PupsChat : JavaPlugin() {
     private lateinit var chatListener: ChatListener
     private lateinit var chatLogManager: ChatLogManager
     private lateinit var dataSaver: PlayerDataSaver
+    private lateinit var feedbackService: FeedbackService
+    private lateinit var aiFilter: AiFilterManager
     private var practiceIntegration: PracticeIntegration? = null
     private val invalidMessageKeys = HashSet<String>()
 
@@ -79,6 +88,9 @@ class PupsChat : JavaPlugin() {
         reloadConfig()
 
         try {
+            feedbackService = FeedbackService(this)
+            aiFilter = AiFilterManager(this)
+            check(aiFilter.loadConfig()) { "Не удалось загрузить ai-filter" }
             dataSaver = PlayerDataSaver(dataFolder.toPath().resolve("data"), logger)
             muteManager = MuteManager(this)
             toxicityManager = ToxicityManager(this, muteManager)
@@ -112,6 +124,7 @@ class PupsChat : JavaPlugin() {
                 floodManager,
                 muteManager,
                 toxicityManager,
+                aiFilter,
                 chatHideManager,
                 hintManager,
                 autoMessageManager,
@@ -128,6 +141,8 @@ class PupsChat : JavaPlugin() {
     }
 
     override fun onDisable() {
+        if (::chatListener.isInitialized) chatListener.close()
+        if (::aiFilter.isInitialized) aiFilter.close()
         if (::announcementManager.isInitialized) announcementManager.stopTask()
         try {
             if (::muteManager.isInitialized) {
@@ -182,8 +197,8 @@ class PupsChat : JavaPlugin() {
         if (!command.name.equals("pupschat", true) || args.isEmpty()) return emptyList()
         if (args.size == 1) {
             val candidates = buildList {
-                if (sender.hasPermission("pupschat.admin")) add("reload")
-                if (sender.hasPermission("pupschat.logs.view") || sender.hasPermission("pupschat.logs.clear")) {
+                if (sender.hasPermission("pupschat.admin")) { add("reload"); add("ai") }
+                if (sender.hasPermission("pupschat.logs.view") || sender.hasPermission("pupschat.logs.clear") || sender.hasPermission("pupschat.logs.staff")) {
                     add("logs")
                 }
             }
@@ -199,11 +214,15 @@ class PupsChat : JavaPlugin() {
             return true
         }
         if (!sender.hasPermission("pupschat.admin")) {
-            sender.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
+            feedback("commands", sender, message("no-permission", "<color:#FF638F>Недостаточно прав"))
+            return true
+        }
+        if (args.firstOrNull()?.equals("ai", true) == true && ::aiFilter.isInitialized) {
+            sender.sendMessage(aiFilter.status())
             return true
         }
         if (args.firstOrNull()?.equals("reload", true) != true) {
-            sender.sendMessage(message("reload-usage", "<gray>Использование: /pupschat (reload/logs)"))
+            feedback("commands", sender, message("reload-usage", "<gray>Использование: /pupschat (reload/logs)"))
             return true
         }
 
@@ -227,6 +246,8 @@ class PupsChat : JavaPlugin() {
 
         reloadConfig()
         invalidMessageKeys.clear()
+        val feedbackReloaded = feedbackService.loadConfig()
+        val aiReloaded = aiFilter.loadConfig()
         filterManager.loadConfig()
         violationManager.loadConfig()
         muteManager.loadConfig()
@@ -240,6 +261,10 @@ class PupsChat : JavaPlugin() {
         chatLogManager.reload()
         val chatFormatReloaded = chatListener.loadConfig()
         when {
+            !feedbackReloaded || !aiReloaded -> {
+                feedback("commands", sender, message("reload-failed", "<color:#FF638F>Не удалось загрузить {file}: {error}",
+                    "file" to "config.yml", "error" to "используются предыдущие настройки уведомлений или ИИ"))
+            }
             !toxicityReloaded -> {
                 sender.sendMessage(
                     message(
@@ -260,18 +285,18 @@ class PupsChat : JavaPlugin() {
                     )
                 )
             }
-            else -> sender.sendMessage(message("reload-success", "<green>Конфиг перезагружен"))
+            else -> feedback("commands", sender, message("reload-success", "<green>Конфиг перезагружен"))
         }
         return true
     }
 
     private fun handleFilterUnmuteCommand(sender: CommandSender, args: Array<out String>): Boolean {
         if (!sender.hasPermission("pupschat.unmutef")) {
-            sender.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
+            feedback("commands", sender, message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return true
         }
         if (args.size != 1) {
-            sender.sendMessage(message("unmutef-usage", "<gray>Использование: /unmutef <игрок>"))
+            feedback("commands", sender, message("unmutef-usage", "<gray>Использование: /unmutef <игрок>"))
             return true
         }
 
@@ -281,7 +306,7 @@ class PupsChat : JavaPlugin() {
             ?: muteManager.findMutedPlayerId(args[0])
             ?: cachedTarget?.uniqueId
         if (targetId == null) {
-            sender.sendMessage(message("player-not-found", "<color:#FF638F>Игрок не найден"))
+            feedback("commands", sender, message("player-not-found", "<color:#FF638F>Игрок не найден"))
             return true
         }
 
@@ -315,10 +340,19 @@ class PupsChat : JavaPlugin() {
 
         for (file in listOf(File(dataFolder, "config.yml"), announcementsFile)) {
             try {
-                YamlConfiguration().load(file)
+                val candidate = YamlConfiguration().apply { load(file) }
+                if (file.name == "config.yml") {
+                    ChannelSettings.read(candidate)
+                    BoundedChatText.readMaximum(candidate)
+                    ChatFormatter(this).validateConfig(candidate)
+                    FeedbackSettings.read(candidate)
+                    AiFilterSettings.read(candidate)
+                }
             } catch (exception: InvalidConfigurationException) {
                 return ConfigurationFailure(file, exception)
             } catch (exception: IOException) {
+                return ConfigurationFailure(file, exception)
+            } catch (exception: RuntimeException) {
                 return ConfigurationFailure(file, exception)
             }
         }
@@ -327,7 +361,7 @@ class PupsChat : JavaPlugin() {
 
     private fun handleActionBarCommand(sender: CommandSender, args: Array<out String>): Boolean {
         if (!sender.hasPermission("pupschat.acb")) {
-            sender.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
+            feedback("commands", sender, message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return true
         }
         if (args.size < 2) {
@@ -360,7 +394,7 @@ class PupsChat : JavaPlugin() {
 
         val target = Bukkit.getPlayerExact(args[0])
         if (target == null) {
-            sender.sendMessage(message("player-not-found", "<color:#FF638F>Игрок не найден"))
+            feedback("commands", sender, message("player-not-found", "<color:#FF638F>Игрок не найден"))
         } else {
             target.sendActionBar(component)
         }
@@ -369,7 +403,7 @@ class PupsChat : JavaPlugin() {
 
     private fun handleChatHideCommand(player: Player): Boolean {
         if (!player.hasPermission("pupschat.chat")) {
-            player.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
+            feedback("commands", player, message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return true
         }
 
@@ -390,7 +424,7 @@ class PupsChat : JavaPlugin() {
 
     private fun handleAutoMessageCommand(player: Player): Boolean {
         if (!player.hasPermission("pupschat.automessage")) {
-            player.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
+            feedback("commands", player, message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return true
         }
         if (practiceIntegration?.autoMessagesAvailable != true) {
@@ -425,7 +459,7 @@ class PupsChat : JavaPlugin() {
 
     private fun handleMentionsCommand(player: Player): Boolean {
         if (!player.hasPermission("pupschat.mentions")) {
-            player.sendMessage(message("no-permission", "<color:#FF638F>Недостаточно прав"))
+            feedback("commands", player, message("no-permission", "<color:#FF638F>Недостаточно прав"))
             return true
         }
 
@@ -442,11 +476,15 @@ class PupsChat : JavaPlugin() {
     }
 
     private fun sendSettingFeedback(player: Player, component: Component) {
-        val output = config.getString(
-            "command-messages.player-settings-output",
-            "action-bar"
-        )?.lowercase(Locale.ROOT)
-        if (output == "chat") player.sendMessage(component) else player.sendActionBar(component)
+        feedback("settings", player, component)
+    }
+
+    internal fun feedback(key: String, sender: CommandSender, component: Component) {
+        if (::feedbackService.isInitialized) feedbackService.send(key, sender, component) else sender.sendMessage(component)
+    }
+
+    internal fun recordRouted(playerId: UUID, channelId: String, text: String, outcome: String) {
+        if (::chatLogManager.isInitialized) chatLogManager.recordRouted(playerId, channelId, text, outcome)
     }
 
     internal fun message(

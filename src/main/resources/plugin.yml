@@ -6,10 +6,12 @@ description: Настраиваемый чат и автоматическая �
 authors: [bworld, nemallone]
 website: https://github.com/nemallone/PupsChat
 softdepend: [PremiumVanish, Essentials, PlaceholderAPI, StrikePractice]
+libraries:
+  - org.jetbrains.kotlin:kotlin-stdlib:2.1.20
 commands:
   pupschat:
     description: Управление PupsChat и просмотр логов
-    usage: /pupschat (reload/logs)
+    usage: /pupschat (reload/logs/ai)
     aliases: [pchat]
   mentions:
     description: Переключение уведомлений об упоминаниях
@@ -31,6 +33,21 @@ permissions:
       pupschat.unmutef: true
       pupschat.logs.view: true
       pupschat.logs.clear: true
+      pupschat.logs.staff: true
+      pupschat.staff: true
+  pupschat.staff:
+    default: op
+    children:
+      pupschat.staff.send: true
+      pupschat.staff.read: true
+  pupschat.staff.send:
+    default: op
+  pupschat.staff.read:
+    default: op
+  pupschat.logs.staff:
+    default: op
+  pupschat.bypass.ai:
+    default: false
   pupschat.logs.view:
     default: op
   pupschat.logs.clear:

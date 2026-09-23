@@ -58,6 +58,7 @@ internal class FilterManager(
         val playtimeMinMinutes: Int,
         val playtimeTemplate: String,
         val alertsTemplate: String,
+        val staffReadPermission: String,
         val replacementsEnabled: Boolean,
         val replacementMapLower: Map<String, String>,
         val charsComponent: Component,
@@ -240,6 +241,8 @@ internal class FilterManager(
             playtimeMinMinutes = playtimeMinMinutes,
             playtimeTemplate = playtimeTemplate,
             alertsTemplate = alertsTemplate,
+            staffReadPermission = config.getString("staff-chat.read-permission", "pupschat.staff.read")
+                ?.takeIf(String::isNotBlank) ?: "pupschat.staff.read",
             replacementsEnabled = replacementsEnabled,
             replacementMapLower = replacementMapLower,
             charsComponent = charsComponent,
@@ -279,38 +282,38 @@ internal class FilterManager(
         return replacedWords.joinToString(" ")
     }
 
-    fun filterMessage(player: Player, message: String, privateContext: String?): FilterResult {
+    fun filterMessage(player: Player, message: String, privateContext: String?, commitHistory: Boolean = true): FilterResult {
         val current = settings
         if (checkPlaytime(player, current)) return FilterResult.Blocked
 
         val failedCheck = when {
             checkAds(player, message, current) -> {
-                player.sendMessage(current.adsComponent)
+                plugin.feedback("filters.ads", player, current.adsComponent)
                 Check.ADS
             }
 
             checkWords(player, message, current) -> {
-                player.sendMessage(current.wordsComponent)
+                plugin.feedback("filters.words", player, current.wordsComponent)
                 Check.WORDS
             }
 
             checkExcessiveSymbols(player, message, current) -> {
-                player.sendMessage(current.symbolsComponent)
+                plugin.feedback("filters.symbols", player, current.symbolsComponent)
                 Check.SYMBOLS
             }
 
             checkChars(player, message, current) -> {
-                player.sendMessage(current.charsComponent)
+                plugin.feedback("filters.characters", player, current.charsComponent)
                 Check.CHARACTERS
             }
 
             checkRandomChars(player, message, current) -> {
-                player.sendMessage(current.randomCharsComponent)
+                plugin.feedback("filters.random-chars", player, current.randomCharsComponent)
                 Check.RANDOM_CHARS
             }
 
             checkSpam(player, message, current) -> {
-                player.sendMessage(current.spamComponent)
+                plugin.feedback("filters.spam", player, current.spamComponent)
                 Check.SPAM
             }
 
@@ -329,21 +332,25 @@ internal class FilterManager(
             message
         }
 
-        val history = lastMessages.computeIfAbsent(player.uniqueId) { ArrayDeque() }
-
-        val similarityCheckMessage = current.randomNumbersPattern.matcher(filteredMessage).replaceAll("")
-
-        synchronized(history) {
-            val now = System.currentTimeMillis()
-            history.addLast(CachedMessage(similarityCheckMessage.lowercase(Locale.ROOT), now))
-            discardExpired(history, now, current.spamHistorySeconds)
-            while (history.size > current.spamHistoryMessages) history.removeFirst()
-        }
+        if (commitHistory) rememberMessage(player.uniqueId, filteredMessage, current)
 
         return if (filteredMessage != message) {
             FilterResult.Modified(filteredMessage)
         } else {
             FilterResult.Allowed
+        }
+    }
+
+    fun rememberMessage(player: UUID, message: String) = rememberMessage(player, message, settings)
+
+    private fun rememberMessage(player: UUID, message: String, current: Settings) {
+        val history = lastMessages.computeIfAbsent(player) { ArrayDeque() }
+        val normalized = current.randomNumbersPattern.matcher(message.lowercase(Locale.ROOT)).replaceAll("")
+        synchronized(history) {
+            val now = System.currentTimeMillis()
+            history.addLast(CachedMessage(normalized, now))
+            discardExpired(history, now, current.spamHistorySeconds)
+            while (history.size > current.spamHistoryMessages) history.removeFirst()
         }
     }
 
@@ -358,7 +365,9 @@ internal class FilterManager(
         }
         val required = current.playtimeMinMinutes * 60L * 20L
         if (ticks < required) {
-            player.sendMessage(
+            plugin.feedback(
+                "filters.playtime",
+                player,
                 miniMessage.deserialize(
                     current.playtimeTemplate,
                     Placeholder.unparsed(
@@ -532,9 +541,11 @@ internal class FilterManager(
         )
 
         for (staff in Bukkit.getOnlinePlayers()) {
-            if (staff.hasPermission("pupschat.alerts")) staff.sendMessage(component)
+            if (staff.hasPermission("pupschat.alerts") &&
+                (privateContext != "staff" || staff.hasPermission(current.staffReadPermission))
+            ) staff.sendMessage(component)
         }
-        Bukkit.getConsoleSender().sendMessage(component)
+        if (privateContext != "staff") Bukkit.getConsoleSender().sendMessage(component)
     }
 
     private fun preparePlaytimeTemplate(message: String): String {

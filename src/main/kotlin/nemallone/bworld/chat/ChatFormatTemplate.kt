@@ -17,20 +17,51 @@ internal class ChatFormatTemplate private constructor(
         message: Component?,
         restrictedValue: String,
         resolvePlaceholder: (String) -> String
-    ): Component {
-        val resolvers = ArrayList<TagResolver>(segments.size + 1)
-        if (message != null) resolvers.add(Placeholder.component("message", message))
+    ): Component = prepare(playerName, restrictedValue, resolvePlaceholder).render(message)
+
+    fun prepare(
+        playerName: String,
+        restrictedValue: String,
+        resolvePlaceholder: (String) -> String
+    ): Prepared {
+        val fixedResolvers = ArrayList<TagResolver>(segments.size)
+        val messageMetas = LinkedHashMap<String, String>()
         for (i in segments.indices) {
-            val rendered = render(segments[i], playerName, message, restrictedValue, resolvePlaceholder)
-            resolvers.add(Placeholder.component(SEGMENT_TAG_PREFIX + i, rendered))
+            val name = SEGMENT_TAG_PREFIX + i
+            when (val segment = segments[i]) {
+                is Segment.Message -> messageMetas[name] = renderMeta(segment.metas, resolvePlaceholder)
+                else -> fixedResolvers.add(Placeholder.component(
+                    name, render(segment, playerName, restrictedValue, resolvePlaceholder)
+                ))
+            }
         }
-        return ComponentParser.miniMessage.deserializeChecked(pattern, *resolvers.toTypedArray())
+        return Prepared(pattern, fixedResolvers.toList(), messageMetas.toMap())
+    }
+
+    // PAPI и мета уже разрешены, при отрисовке меняется только текст сообщения
+    class Prepared internal constructor(
+        private val pattern: String,
+        private val fixedResolvers: List<TagResolver>,
+        private val messageMetas: Map<String, String>
+    ) {
+        fun render(message: Component?): Component {
+            val resolvers = ArrayList<TagResolver>(fixedResolvers.size + messageMetas.size + 1)
+            resolvers.addAll(fixedResolvers)
+            if (message != null) resolvers.add(Placeholder.component("message", message))
+            for ((name, meta) in messageMetas) {
+                val content = requireNotNull(message) { "Шаблон сообщения отрисован без текста сообщения" }
+                val colored = if (meta.isEmpty()) content else ComponentParser.miniMessage.deserialize(
+                    meta + "<message>", Placeholder.component("message", content)
+                )
+                resolvers.add(Placeholder.component(name, colored))
+            }
+            return ComponentParser.miniMessage.deserializeChecked(pattern, *resolvers.toTypedArray())
+        }
     }
 
     private fun render(
         segment: Segment,
         playerName: String,
-        message: Component?,
         restrictedValue: String,
         resolvePlaceholder: (String) -> String
     ): Component = when (segment) {
@@ -39,15 +70,10 @@ internal class ChatFormatTemplate private constructor(
         )
         Segment.Restricted -> ComponentParser.parseMixed(restrictedValue)
         is Segment.Nick -> colorizeText(segment.metas, playerName, resolvePlaceholder)
-        is Segment.Message -> colorizeMessage(
-            segment.metas,
-            requireNotNull(message) { "Шаблон сообщения отрисован без текста сообщения" },
-            resolvePlaceholder
-        )
+        is Segment.Message -> error("Текст сообщения подставляется при отрисовке")
     }
 
-    // мета цвета и её содержимое разбираются одной строкой, иначе градиент из меты
-    // растягивается на весь остаток формата, а не на ник или сообщение
+    // Мету цвета разбираем вместе с текстом, чтобы градиент не растянулся на остаток строки
     private fun colorizeText(
         metas: List<String>,
         text: String,
@@ -57,19 +83,6 @@ internal class ChatFormatTemplate private constructor(
 
         val mini = ComponentParser.miniMessage
         return mini.deserialize(renderMeta(metas, resolvePlaceholder) + mini.escapeTags(text))
-    }
-
-    private fun colorizeMessage(
-        metas: List<String>,
-        message: Component,
-        resolvePlaceholder: (String) -> String
-    ): Component {
-        if (metas.isEmpty()) return message
-
-        return ComponentParser.miniMessage.deserialize(
-            renderMeta(metas, resolvePlaceholder) + "<message>",
-            Placeholder.component("message", message)
-        )
     }
 
     private fun renderMeta(

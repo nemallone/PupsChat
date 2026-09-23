@@ -1,12 +1,15 @@
 package nemallone.bworld.chat
 
-import io.papermc.paper.event.player.AsyncChatEvent
+import io.papermc.paper.chat.ChatRenderer
+import nemallone.bworld.chat.api.ChatChannel
+import net.kyori.adventure.audience.Audience
 import me.clip.placeholderapi.PlaceholderAPI
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.event.ClickEvent
 import net.kyori.adventure.text.event.HoverEvent
 import org.bukkit.Bukkit
 import org.bukkit.entity.Player
+import org.bukkit.configuration.file.FileConfiguration
 import java.util.Collections
 import java.util.IdentityHashMap
 
@@ -15,6 +18,7 @@ internal class ChatFormatter(private val plugin: PupsChat) {
     private class Settings(
         val enabled: Boolean,
         val format: ChatFormatTemplate,
+        val channelFormats: Map<ChatChannel, ChatFormatTemplate>,
         val hoverEnabled: Boolean,
         val hoverLines: List<ChatFormatTemplate>,
         val restrictedPermission: String,
@@ -28,6 +32,7 @@ internal class ChatFormatter(private val plugin: PupsChat) {
 
     private var placeholderFailureLogged = false
 
+    @Volatile
     private var settings = defaultSettings()
 
     fun loadConfig(): Boolean {
@@ -44,10 +49,19 @@ internal class ChatFormatter(private val plugin: PupsChat) {
         }
     }
 
-    private fun readSettings(): Settings {
-        val config = plugin.config
+    fun validateConfig(config: FileConfiguration) {
+        readSettings(config)
+    }
+
+    private fun readSettings(config: FileConfiguration = plugin.config): Settings {
         val placeholderApiAvailable = Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")
         val format = config.getString("chat-format.format", DEFAULT_FORMAT) ?: DEFAULT_FORMAT
+        val channelFormats = buildMap {
+            config.getString("channels.global.format")?.takeIf(String::isNotBlank)?.let { put(ChatChannel.GLOBAL, it) }
+            config.getString("channels.local.format")?.takeIf(String::isNotBlank)?.let { put(ChatChannel.LOCAL, it) }
+            put(ChatChannel.STAFF, config.getString("staff-chat.format", DEFAULT_STAFF_FORMAT) ?: DEFAULT_STAFF_FORMAT)
+        }
+        val allFormats = channelFormats.values + format
         val restrictedPlaceholder = config.getString(
             "chat-format.restricted-placeholder.value",
             ""
@@ -59,13 +73,14 @@ internal class ChatFormatter(private val plugin: PupsChat) {
                     config.getStringList("chat-format.restricted-placeholder.aliases")
                         .filter(String::isNotEmpty)
                 )
-            }.distinct().filter { format.contains(it) }
+            }.distinct().filter { placeholder -> allFormats.any { it.contains(placeholder) } }
         } else {
             emptyList()
         }
         return Settings(
             enabled = config.getBoolean("chat-format.enabled", true),
             format = ChatFormatTemplate.compile(format, restrictedPlaceholders),
+            channelFormats = channelFormats.mapValues { ChatFormatTemplate.compile(it.value, restrictedPlaceholders) },
             hoverEnabled = config.getBoolean("chat-format.hover.enabled", false),
             hoverLines = compileLines(config.getStringList("chat-format.hover.lines")),
             restrictedPermission = config.getString("chat-format.hover.permission", "") ?: "",
@@ -86,12 +101,13 @@ internal class ChatFormatter(private val plugin: PupsChat) {
         )
     }
 
-    fun format(event: AsyncChatEvent, sender: Player, message: Component) {
+    fun renderer(sender: Player, message: Component, channel: ChatChannel, viewers: Set<Audience>): ChatRenderer? {
         val current = settings
-        if (!current.enabled) return
+        if (!current.enabled) return null
+        val format = current.channelFormats[channel] ?: current.format
 
         val resolver = placeholderResolver(sender, current.placeholderApiAvailable)
-        val hasRestricted = current.format.hasRestrictedPlaceholder
+        val hasRestricted = format.hasRestrictedPlaceholder
         val ownerRestricted = current.restrictedPermission.isNotEmpty() &&
             sender.hasPermission(current.restrictedPermission)
         val visibleValue = if (hasRestricted) {
@@ -100,8 +116,8 @@ internal class ChatFormatter(private val plugin: PupsChat) {
             ""
         }
 
-        fun buildBase(restrictedValue: String): Component =
-            current.format.render(sender.name, message, restrictedValue, resolver)
+        fun buildBase(restrictedValue: String): ChatFormatTemplate.Prepared =
+            format.prepare(sender.name, restrictedValue, resolver)
 
         val visibleBase = buildBase(visibleValue)
         val restrictedBase = if (ownerRestricted && hasRestricted) {
@@ -113,30 +129,27 @@ internal class ChatFormatter(private val plugin: PupsChat) {
         val hoverActive = current.hoverEnabled &&
             (current.hoverLines.isNotEmpty() || current.restrictedLines.isNotEmpty())
 
-        fun renderForViewer(showFullDetails: Boolean): Component {
-            var component = if (showFullDetails) visibleBase else restrictedBase
-            if (hoverActive) {
+        fun renderForViewer(showFullDetails: Boolean): (Component) -> Component {
+            val base = if (showFullDetails) visibleBase else restrictedBase
+            val hover = if (hoverActive) {
                 val hoverLines = if (showFullDetails) {
                     current.hoverLines.ifEmpty { current.restrictedLines }
                 } else {
                     current.restrictedLines.ifEmpty { current.hoverLines }
                 }
-                component = component.hoverEvent(
-                    HoverEvent.showText(buildHover(sender, hoverLines, resolver))
-                )
-            }
-            if (clickEvent != null) component = component.clickEvent(clickEvent)
-            return component
+                buildHover(sender, hoverLines, resolver)
+            } else null
+            return prepareMessageRenderer(base, message, hover, clickEvent)
         }
 
-        when {
+        return when {
             !ownerRestricted -> {
-                val component = renderForViewer(true)
-                event.renderer { _, _, _, _ -> component }
+                val render = renderForViewer(true)
+                ChatRenderer { _, _, finalMessage, _ -> render(finalMessage) }
             }
             current.bypassPermission.isEmpty() -> {
-                val component = renderForViewer(false)
-                event.renderer { _, _, _, _ -> component }
+                val render = renderForViewer(false)
+                ChatRenderer { _, _, finalMessage, _ -> render(finalMessage) }
             }
             else -> {
                 val full = renderForViewer(true)
@@ -144,16 +157,16 @@ internal class ChatFormatter(private val plugin: PupsChat) {
                 val bypassViewers = Collections.newSetFromMap(
                     IdentityHashMap<Player, Boolean>()
                 )
-                for (viewer in Bukkit.getOnlinePlayers()) {
-                    if (viewer.hasPermission(current.bypassPermission)) {
+                for (viewer in viewers) {
+                    if (viewer is Player && viewer.hasPermission(current.bypassPermission)) {
                         bypassViewers.add(viewer)
                     }
                 }
-                event.renderer { _, _, _, viewer ->
+                ChatRenderer { _, _, finalMessage, viewer ->
                     if (viewer is Player && viewer in bypassViewers) {
-                        full
+                        full(finalMessage)
                     } else {
-                        restricted
+                        restricted(finalMessage)
                     }
                 }
             }
@@ -224,6 +237,7 @@ internal class ChatFormatter(private val plugin: PupsChat) {
     private fun defaultSettings() = Settings(
         enabled = true,
         format = ChatFormatTemplate.compile(DEFAULT_FORMAT),
+        channelFormats = mapOf(ChatChannel.STAFF to ChatFormatTemplate.compile(DEFAULT_STAFF_FORMAT)),
         hoverEnabled = false,
         hoverLines = emptyList(),
         restrictedPermission = "",
@@ -237,6 +251,24 @@ internal class ChatFormatter(private val plugin: PupsChat) {
 
     private companion object {
         const val DEFAULT_FORMAT = "<gray>{player} <dark_gray>→ <white>{message}"
+        const val DEFAULT_STAFF_FORMAT = "<color:#FF916E>[ꜱᴛᴀꜰꜰ] <white>{player} → {message}"
         const val DEFAULT_HIDDEN_TEXT = "<gray>???"
     }
+}
+
+internal fun prepareMessageRenderer(
+    template: ChatFormatTemplate.Prepared,
+    originalMessage: Component,
+    hover: Component?,
+    click: ClickEvent?
+): (Component) -> Component {
+    fun render(message: Component): Component {
+        var component = template.render(message)
+        if (hover != null) component = component.hoverEvent(HoverEvent.showText(hover))
+        if (click != null) component = component.clickEvent(click)
+        return component
+    }
+    // Обычное сообщение повторно не разбираем, изменения других плагинов сохраняем
+    val original = render(originalMessage)
+    return { message -> if (message == originalMessage) original else render(message) }
 }

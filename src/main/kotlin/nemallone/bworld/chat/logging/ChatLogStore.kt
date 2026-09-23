@@ -32,6 +32,7 @@ import kotlin.io.path.isRegularFile
 internal enum class ChatLogType(val fileName: String, val yamlKey: String, val label: String) {
     MESSAGES("messages.yml", "messages", "сообщений"),
     COMMANDS("commands.yml", "commands", "команд"),
+    STAFF("staff.yml", "staff", "сообщений сотрудников"),
 }
 
 internal data class ChatLogEntry(
@@ -40,7 +41,22 @@ internal data class ChatLogEntry(
     val ip: String,
     val text: String,
     val timestamp: Long,
+    val channelId: String? = null,
+    val outcome: String? = null,
 )
+
+internal fun routedLogType(channelId: String): ChatLogType =
+    if (channelId.equals("staff", ignoreCase = true)) ChatLogType.STAFF else ChatLogType.MESSAGES
+
+internal fun routedLogMetadata(channelId: String?, outcome: String?): String {
+    fun safe(value: String): String = value.take(64).map {
+        if (it.isLetterOrDigit() || it in "_-.") it else '_'
+    }.joinToString("")
+    return buildString {
+        if (channelId != null) append("[channel: ").append(safe(channelId)).append("] ")
+        if (outcome != null) append("[outcome: ").append(safe(outcome)).append("] ")
+    }
+}
 
 internal data class ChatLogOptions(
     val enabled: Boolean,
@@ -247,8 +263,9 @@ internal class ChatLogStore(
                 }
                 val time = ENTRY_TIME.format(Instant.ofEpochMilli(entry.timestamp))
                 val ip = entry.ip.ifBlank { "unknown" }
-                val playerValue = "[$time] [IP: $ip] ${entry.text}"
-                val allValue = "[$time] [Игрок: ${entry.playerName}] [IP: $ip] ${entry.text}"
+                val metadata = routedLogMetadata(entry.channelId, entry.outcome)
+                val playerValue = "[$time] [IP: $ip] $metadata${entry.text}"
+                val allValue = "[$time] [Игрок: ${entry.playerName}] [IP: $ip] $metadata${entry.text}"
                 val playerPath = sessionDirectory.resolve(safeName(entry.playerName)).resolve(entry.type.fileName)
                 val latestPath = root.resolve("all-${entry.type.yamlKey}-latest.yml")
                 val required = encodedLineSize(playerValue) + encodedLineSize(allValue) + HEADER_RESERVE_BYTES
@@ -368,14 +385,16 @@ internal class ChatLogStore(
 
     private fun reserveDisk(required: Long): Boolean {
         val limit = options.maxTotalBytes
-        if (limit <= 0L || totalBytes.get() + required <= limit) return true
+        if (limit <= 0L) return true
+        if (required > limit) return false
+        if (totalBytes.get() <= limit - required) return true
         val now = System.currentTimeMillis()
         if (now < capacityRetryAt) return false
         flushWriters()
         synchronized(maintenanceLock) {
-            cleanup()
+            cleanup(required)
         }
-        val available = totalBytes.get() + required <= limit
+        val available = totalBytes.get() <= limit - required
         capacityRetryAt = if (available) 0L else now + CAPACITY_RETRY_MS
         return available
     }
@@ -419,7 +438,7 @@ internal class ChatLogStore(
         totalBytes.updateAndGet { current -> (current - size).coerceAtLeast(0L) + archiveSize }
     }
 
-    private fun cleanup() {
+    private fun cleanup(reservedBytes: Long = 0L) {
         val retention = options.retentionMillis
         if (retention > 0L) deleteEligible(System.currentTimeMillis() - retention)
         val limit = options.maxTotalBytes
@@ -428,7 +447,8 @@ internal class ChatLogStore(
             totalBytes.set(size)
             return
         }
-        if (size <= limit) {
+        val targetSize = (limit - reservedBytes).coerceAtLeast(0L)
+        if (size <= targetSize) {
             totalBytes.set(size)
             return
         }
@@ -436,7 +456,7 @@ internal class ChatLogStore(
             val removed = pathSize(path)
             deleteTree(path)
             size = (size - removed).coerceAtLeast(0L)
-            if (size <= limit) break
+            if (size <= targetSize) break
         }
         totalBytes.set(size)
     }
@@ -707,7 +727,7 @@ internal class ChatLogStore(
         val ENTRY_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZONE)
         val ARCHIVE_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("dd-MM-yyyy-HH-mm-ss").withZone(ZONE)
         val SESSION_NAME = Regex("\\d{2}-\\d{2}-\\d{4}-\\d{2}-\\d{2}-\\d{2}")
-        val ARCHIVE_NAME = Regex("all-(?:messages|commands)-\\d{2}-\\d{2}-\\d{4}-\\d{2}-\\d{2}-\\d{2}(?:-\\d+)?\\.yml")
+        val ARCHIVE_NAME = Regex("all-(?:messages|commands|staff)-\\d{2}-\\d{2}-\\d{4}-\\d{2}-\\d{2}-\\d{2}(?:-\\d+)?\\.yml")
         val PLAYER_NAME = Regex("[A-Za-z0-9_]{1,16}")
         val UNSAFE_NAME = Regex("[^A-Za-z0-9_]")
     }

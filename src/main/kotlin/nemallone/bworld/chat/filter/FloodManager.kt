@@ -65,7 +65,7 @@ internal class FloodManager(
 
             if (timestamps.size > maxMessages) {
                 timestamps.clear()
-                player.sendMessage(floodMessage)
+                plugin.feedback("filters.flood", player, floodMessage)
                 violationManager.addViolation(player)
                 return true
             }

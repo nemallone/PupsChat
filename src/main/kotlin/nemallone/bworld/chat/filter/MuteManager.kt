@@ -103,7 +103,7 @@ internal class MuteManager(private val plugin: PupsChat) {
         mutes.put(uuid, player.name, now + minutes * MILLISECONDS_PER_MINUTE)
         queueSave()
 
-        player.sendMessage(render(muteMessageTemplate, formatMinutes(minutes)))
+        plugin.feedback("mute.applied", player, render(muteMessageTemplate, formatMinutes(minutes)))
     }
 
     fun findMutedPlayerId(playerName: String): UUID? = mutes.findActivePlayerId(playerName)
@@ -121,7 +121,7 @@ internal class MuteManager(private val plugin: PupsChat) {
         val remaining = expiration - System.currentTimeMillis()
 
         if (remaining > 0) {
-            player.sendMessage(render(mutedMessageTemplate, formatRemaining(remaining)))
+            plugin.feedback("mute.remaining", player, render(mutedMessageTemplate, formatRemaining(remaining)))
             return true
         }
 

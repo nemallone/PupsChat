@@ -1,10 +1,42 @@
 # Цвета и оформление сообщений задаются через MiniMessage:
 # https://docs.advntr.dev/minimessage/format.html
 
+# При local.enabled: false весь чат становится глобальным
+channels:
+    local:
+        enabled: false
+        radius: 100.0
+        console: true
+        # Пустая строка использует chat-format.format
+        format: ""
+    global:
+        # Переключает сообщение из локального чата в глобальный
+        prefix: "!"
+        # Убирать этот префикс и при выключенном локальном чате
+        strip-prefix-without-local: true
+        console: true
+        format: ""
+
+# Отдельный чат персонала; при enabled: false символ # остаётся в сообщении
+staff-chat:
+    enabled: false
+    prefix: "#"
+    send-permission: "pupschat.staff.send"
+    read-permission: "pupschat.staff.read"
+    console: false
+    format: "<color:#FF916E>[ꜱᴛᴀꜰꜰ] <white>{player} <dark_gray>→ <white>{message}"
+
+# Короткие уведомления: CHAT или ACTION_BAR
+# Длинные ответы остаются в чате
+notifications:
+    default-output: CHAT
+    overrides:
+        settings: ACTION_BAR
+        local-no-audience: ACTION_BAR
+
 chat-processing:
-    # Если сообщение начинается с этого символа, плагин уберёт его перед проверкой и отправкой
-    # Оставьте пустую строку, если такой префикс не нужен
-    remove-leading-prefix: "!"
+    # Максимальная длина сообщения в чате и личных командах, от 32 до 1024
+    max-message-length: 512
     # Сообщения из перечисленных команд тоже проходят через чат-фильтры
     # Названия указываются без '/'
     # Пустой список [] отключает обработку этой группы
@@ -161,7 +193,7 @@ words:
 
 random-chars:
     enabled: true
-    # Пороги срабатывания: повтор одной буквы, целое число и число с точкой или запятой
+    # Пороги срабатывания: повтор буквы, целое число и дробь вида 0.12345
     # Например, при значении 6 будут заблокированы "аааааа" и шестизначное целое число
     repeated-character-threshold: 6
     integer-digits-threshold: 6
@@ -182,12 +214,13 @@ punishment:
     mute-message: "<color:#FF638F>Чат временно недоступен. Длительность мута: %time%"
     muted-message: "<color:#FF638F>До снятия мута осталось %time%"
 
-# action: warn отправляет сообщение, block отменяет его
-# В обоих режимах автор получает предупреждение и нарушение
-# Когда нарушений становится max-violations за window-minutes, применяется punishment
+# action: warn пропускает сообщение. block блокирует сообщение
+# В обоих режимах автор получает предупреждение
 toxicity:
     enabled: true
     action: warn
+    # false оставляет предупреждения без накопления мутов за токсичность
+    mute-enabled: true
     max-violations: 10
     window-minutes: 10
     messages:
@@ -197,6 +230,14 @@ toxicity:
     # Слова-исключения проверяются раньше exact и stem и никогда не считаются токсичными
     # allowed-words: [ "педикюр" ]
     allowed-words: []
+
+# Необязательная встроенная модель; работает без сети и ключей
+# Дополняет toxicity; рекламу и спам проверяют обычные фильтры
+# Своя модель: ai-model.bin в папке PupsChat
+ai-filter:
+    enabled: false
+    # Чем выше порог, тем реже срабатывания; это не показатель точности
+    threshold: 0.9
 
 alerts:
     # Служебное уведомление персоналу с правом pupschat.alerts
@@ -258,13 +299,13 @@ logging:
         [ "login", "l", "register", "reg", "changepassword", "changepass", "cp" ]
 
 command-messages:
-    # action-bar или chat
-    player-settings-output: "action-bar"
+    # куда выводится результат переключения пользовательских настроек?
+    player-settings-output: "action-bar" # action-bar или chat
 
     no-permission: "<color:#FF638F>Недостаточно прав"
-    reload-success: "<green>Конфиг перезагружен"
+    reload-success: "<color:#A4FF63>Конфигурация перезагружена"
     reload-failed: "<color:#FF638F>Не удалось загрузить {file}: {error}"
-    reload-usage: "<gray>Использование: /pupschat (reload/logs)"
+    reload-usage: "<gray>Использование: /pupschat (reload/logs/ai)"
     logs-usage-view: "<gray>/pupschat logs (messages/commands) all [строк]"
     logs-usage-player: "<gray>/pupschat logs (messages/commands) player <ник> [строк]"
     logs-view-usage: "<gray>Использование: /pupschat logs {type} all [строк] | player <ник> [строк]"
@@ -281,6 +322,10 @@ command-messages:
     action-bar-usage: '<gray>Использование: /acb (ник|@a) \<сообщение>'
     invalid-format: "<color:#FF638F>Ошибка форматирования: {error}"
     player-not-found: "<color:#FF638F>Игрок не найден"
+    channel-disabled: "<color:#FF638F>Этот канал недоступен"
+    empty-message: "<gray>Введите сообщение"
+    message-too-long: "<color:#FF638F>Сообщение слишком длинное"
+    local-no-audience: "<gray>Рядом нет игроков, которые увидят сообщение"
     chat-all: "<gray>Чат <color:#A4FF63>открыт"
     chat-duel: "<gray>Чат <color:#FF638F>скрыт <gray>(<color:#FFDD81>только в дуэли<gray>)"
     chat-off: "<gray>Чат <color:#FF638F>скрыт"
