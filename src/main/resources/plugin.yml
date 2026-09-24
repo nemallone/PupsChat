@@ -19,6 +19,9 @@ commands:
     description: Переключение сообщения после боя
   chathide:
     description: Переключение видимости чата
+  localspy:
+    description: Просмотр локальных сообщений вне радиуса чата
+    usage: /localspy
   unmutef:
     description: Снятие мута, выданного фильтром
     usage: /unmutef <игрок>
@@ -35,6 +38,8 @@ permissions:
       pupschat.logs.clear: true
       pupschat.logs.staff: true
       pupschat.staff: true
+      pupschat.localspy: true
+      pupschat.format.*: true
   pupschat.staff:
     default: op
     children:
@@ -44,6 +49,35 @@ permissions:
     default: op
   pupschat.staff.read:
     default: op
+  pupschat.localspy:
+    default: op
+  pupschat.format.*:
+    default: op
+    children:
+      pupschat.format.color: true
+      pupschat.format.hex: true
+      pupschat.format.bold: true
+      pupschat.format.italic: true
+      pupschat.format.underline: true
+      pupschat.format.strikethrough: true
+      pupschat.format.obfuscated: true
+      pupschat.format.reset: true
+  pupschat.format.color:
+    default: false
+  pupschat.format.hex:
+    default: false
+  pupschat.format.bold:
+    default: false
+  pupschat.format.italic:
+    default: false
+  pupschat.format.underline:
+    default: false
+  pupschat.format.strikethrough:
+    default: false
+  pupschat.format.obfuscated:
+    default: false
+  pupschat.format.reset:
+    default: false
   pupschat.logs.staff:
     default: op
   pupschat.bypass.ai:

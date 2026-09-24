@@ -11,6 +11,7 @@ import nemallone.bworld.chat.channels.ChatPosition
 import nemallone.bworld.chat.channels.BoundedChatText
 import nemallone.bworld.chat.channels.ChatAuditRecord
 import nemallone.bworld.chat.ChatFormatter
+import nemallone.bworld.chat.ChatMessageFormatting
 import nemallone.bworld.chat.PupsChat
 import nemallone.bworld.chat.filter.FilterManager
 import nemallone.bworld.chat.filter.FilterResult
@@ -24,12 +25,14 @@ import nemallone.bworld.chat.messaging.AutoMessageManager
 import nemallone.bworld.chat.messaging.ChatHideManager
 import nemallone.bworld.chat.messaging.HintManager
 import nemallone.bworld.chat.messaging.MentionsManager
+import nemallone.bworld.chat.messaging.LocalSpyManager
 import net.kyori.adventure.audience.Audience
 import net.kyori.adventure.key.Key
 import net.kyori.adventure.sound.Sound
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.TextComponent
 import net.kyori.adventure.text.TextReplacementConfig
+import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
 import org.bukkit.Statistic
 import org.bukkit.configuration.file.FileConfiguration
@@ -40,6 +43,8 @@ import org.bukkit.event.Listener
 import org.bukkit.event.player.PlayerCommandPreprocessEvent
 import org.bukkit.event.player.PlayerJoinEvent
 import org.bukkit.event.player.PlayerQuitEvent
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.util.Locale
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
@@ -56,6 +61,7 @@ internal class ChatListener(
     private val toxicityManager: ToxicityManager,
     private val aiFilter: AiFilterManager,
     private val chatHideManager: ChatHideManager,
+    private val localSpyManager: LocalSpyManager,
     private val hintManager: HintManager,
     private val autoMessageManager: AutoMessageManager,
 ) : Listener {
@@ -72,6 +78,7 @@ internal class ChatListener(
         private val DEFAULT_TARGETED_MAIL_SUBCOMMANDS = setOf("send")
         private val DEFAULT_BROADCAST_MAIL_SUBCOMMANDS = setOf("sendall")
         private val NAME_CANDIDATE_PATTERN = Pattern.compile("(?<![\\p{L}\\p{N}_])@?[A-Za-z0-9_]{3,16}(?![\\p{L}\\p{N}_])")
+        private val LOCAL_SPY_PREFIX = Component.text("[LocalSpy] ", NamedTextColor.GOLD)
     }
 
     private data class Settings(
@@ -280,7 +287,7 @@ internal class ChatListener(
             pendingAudits[event] = draft.audit.copy(outcome = "settings-or-mute-changed")
             return
         }
-        val prepared = finishMessage(event.player, draft)
+        val prepared = finishMessage(event.player, draft, event.renderer())
         pendingAudits[event] = prepared.audit
         if (prepared.result != DeliveryResult.SENT) {
             event.isCancelled = true
@@ -370,9 +377,14 @@ internal class ChatListener(
             }
             if (floodManager.checkFlood(sender)) return reject("flood")
         }
+        val visibleMessage = ChatMessageFormatting.visibleText(plainMessage) { sender.hasPermission(it) }
+        if (visibleMessage.isBlank()) {
+            plugin.feedback("empty-message", sender, plugin.message("empty-message", "<gray>Введите сообщение"))
+            return reject("empty")
+        }
         val aiCategory = if (autoMessage || channel == ChatChannel.STAFF || sender.hasPermission("pupschat.bypass.ai")) null
-            else aiFilter.classify(plainMessage)
-        if (toxicityManager.checkMessage(sender, plainMessage, aiCategory == FilterCategory.TARGETED_INSULT) == FilterResult.Blocked) {
+            else aiFilter.classify(visibleMessage)
+        if (toxicityManager.checkMessage(sender, visibleMessage, aiCategory == FilterCategory.TARGETED_INSULT) == FilterResult.Blocked) {
             return reject("toxicity")
         }
 
@@ -384,7 +396,7 @@ internal class ChatListener(
         )
     }
 
-    private fun finishMessage(sender: Player, draft: PreparedMessage): PreparedMessage {
+    private fun finishMessage(sender: Player, draft: PreparedMessage, originalRenderer: ChatRenderer): PreparedMessage {
         val currentSettings = requireNotNull(draft.settingsSnapshot)
         val channels = currentSettings.channels
         val channel = requireNotNull(draft.channel)
@@ -393,30 +405,58 @@ internal class ChatListener(
         fun reject(outcome: String, result: DeliveryResult = DeliveryResult.REJECTED) =
             PreparedMessage(result, draft.audit.copy(outcome = outcome))
         if (channel == ChatChannel.STAFF && !sender.hasPermission(channels.staffSendPermission)) return reject("no-permission")
+        if ('&' in plainMessage) {
+            messageComponent = ChatMessageFormatting.apply(messageComponent) { permission -> sender.hasPermission(permission) }
+        }
         val recipients = selectRecipients(sender, channel, channels, draft.recipients)
         recipients.removeIf { viewer ->
-            channel != ChatChannel.STAFF && viewer is Player && viewer !== sender && chatHideManager.shouldHide(viewer, sender)
+            channel != ChatChannel.STAFF && viewer is Player && viewer !== sender &&
+                !(channel == ChatChannel.LOCAL && localSpyManager.isEnabled(viewer)) &&
+                chatHideManager.shouldHide(viewer, sender)
         }
         val allowed = recipients.toSet()
         val routedEvent = PupsChatMessageEvent(sender, channel, messageComponent, recipients)
         Bukkit.getPluginManager().callEvent(routedEvent)
         if (routedEvent.isCancelled) return reject("cancelled", DeliveryResult.CANCELLED)
-        if (!draft.autoMessage) filterManager.rememberMessage(sender.uniqueId, plainMessage)
-        if (!draft.autoMessage && channel != ChatChannel.STAFF) hintManager.checkHints(sender, plainMessage)
+        if (!draft.autoMessage) filterManager.rememberMessage(sender, plainMessage)
+        val visibleMessage = ChatMessageFormatting.visibleText(plainMessage) { sender.hasPermission(it) }
+        if (!draft.autoMessage && channel != ChatChannel.STAFF) hintManager.checkHints(sender, visibleMessage)
         // Обработчики события могут убрать получателей, но не обойти ограничения канала
         recipients.retainAll(allowed)
         recipients.retainAll(selectRecipients(sender, channel, channels, recipients))
         recipients.removeIf { viewer ->
-            channel != ChatChannel.STAFF && viewer is Player && viewer !== sender && chatHideManager.shouldHide(viewer, sender)
+            channel != ChatChannel.STAFF && viewer is Player && viewer !== sender &&
+                !(channel == ChatChannel.LOCAL && localSpyManager.isEnabled(viewer)) &&
+                chatHideManager.shouldHide(viewer, sender)
         }
         recipients.add(sender)
 
+        val remoteSpies = if (channel == ChatChannel.LOCAL) {
+            val origin = position(sender)
+            recipients.asSequence().filterIsInstance<Player>()
+                .filter { viewer -> viewer !== sender && localSpyManager.isEnabled(viewer) &&
+                    !ChannelPolicy.withinRadius(origin, position(viewer), channels.localRadius) }
+                .toCollection(LinkedHashSet())
+        } else emptySet()
+        val mentionRecipients = if (remoteSpies.isEmpty()) recipients else {
+            recipients.filterTo(LinkedHashSet()) { it !in remoteSpies }
+        }
+
         messageComponent = handleMentions(
-            sender, plainMessage.lowercase(Locale.ROOT), messageComponent, currentSettings, recipients, channel
+            sender, visibleMessage.lowercase(Locale.ROOT), messageComponent, currentSettings, mentionRecipients, channel
         )
-        val renderer = chatFormatter.renderer(sender, messageComponent, channel, recipients)
+        val formattedRenderer = chatFormatter.renderer(sender, messageComponent, channel, recipients)
+        val renderer = if (remoteSpies.isEmpty()) formattedRenderer else {
+            val delegate = formattedRenderer ?: originalRenderer
+            val spyViewers = Collections.newSetFromMap(IdentityHashMap<Audience, Boolean>())
+            spyViewers.addAll(remoteSpies)
+            ChatRenderer { source, displayName, finalMessage, viewer ->
+                val rendered = delegate.render(source, displayName, finalMessage, viewer)
+                if (viewer in spyViewers) Component.empty().append(LOCAL_SPY_PREFIX).append(rendered) else rendered
+            }
+        }
         if (channel == ChatChannel.LOCAL && recipients.none {
-                it is Player && it !== sender && !vanishIntegration.isVanished(it)
+                it is Player && it !== sender && it !in remoteSpies && !vanishIntegration.isVanished(it)
             }) {
             plugin.feedback("local-no-audience", sender, plugin.message("local-no-audience", "<gray>Рядом нет игроков, которые увидят сообщение"))
         }
@@ -444,8 +484,10 @@ internal class ChatListener(
                 !viewer.isOnline -> false
                 channel == ChatChannel.STAFF -> viewer.hasPermission(settings.staffReadPermission)
                 channel == ChatChannel.LOCAL -> {
-                    val location = viewer.location
-                    ChannelPolicy.withinRadius(requireNotNull(origin), ChatPosition(viewer.world.uid, location.x, location.y, location.z), settings.localRadius)
+                    if (localSpyManager.isEnabled(viewer)) true else {
+                        val location = viewer.location
+                        ChannelPolicy.withinRadius(requireNotNull(origin), ChatPosition(viewer.world.uid, location.x, location.y, location.z), settings.localRadius)
+                    }
                 }
                 else -> true
             }
@@ -454,15 +496,24 @@ internal class ChatListener(
         return result
     }
 
+    private fun position(player: Player): ChatPosition {
+        val location = player.location
+        return ChatPosition(player.world.uid, location.x, location.y, location.z)
+    }
+
     private fun applyMessageFilters(
         player: Player,
         message: String,
         context: String?,
         commitHistory: Boolean = true,
     ): FilterResult {
-        val replacedMessage = filterManager.applyReplacements(message)
+        val replacedMessage = filterManager.applyReplacements(player, message)
         if (replacedMessage.length > settings.maxMessageLength) {
             rejectLongMessage(player)
+            return FilterResult.Blocked
+        }
+        if (ChatMessageFormatting.visibleText(replacedMessage) { player.hasPermission(it) }.isBlank()) {
+            plugin.feedback("empty-message", player, plugin.message("empty-message", "<gray>Введите сообщение"))
             return FilterResult.Blocked
         }
         return when (
@@ -594,7 +645,10 @@ internal class ChatListener(
 
         if (
             command.checkToxicity &&
-            toxicityManager.checkMessage(player, finalMessage) == FilterResult.Blocked
+            toxicityManager.checkMessage(
+                player,
+                ChatMessageFormatting.visibleText(finalMessage) { player.hasPermission(it) }
+            ) == FilterResult.Blocked
         ) {
             event.isCancelled = true
         }

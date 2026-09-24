@@ -1,6 +1,7 @@
 package nemallone.bworld.chat.filter
 
 import nemallone.bworld.chat.PupsChat
+import nemallone.bworld.chat.ChatMessageFormatting
 import nemallone.bworld.chat.deserializeChecked
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.minimessage.MiniMessage
@@ -272,12 +273,13 @@ internal class FilterManager(
         playtimeCache.remove(uuid)
     }
 
-    fun applyReplacements(message: String): String {
+    fun applyReplacements(player: Player, message: String): String {
         val current = settings
         if (!current.replacementsEnabled || current.replacementMapLower.isEmpty()) return message
         val words = message.split(" ")
         val replacedWords = words.map { word ->
-            current.replacementMapLower[word.lowercase(Locale.ROOT)] ?: word
+            val visible = ChatMessageFormatting.visibleText(word) { player.hasPermission(it) }
+            current.replacementMapLower[visible.lowercase(Locale.ROOT)] ?: word
         }
         return replacedWords.joinToString(" ")
     }
@@ -285,34 +287,35 @@ internal class FilterManager(
     fun filterMessage(player: Player, message: String, privateContext: String?, commitHistory: Boolean = true): FilterResult {
         val current = settings
         if (checkPlaytime(player, current)) return FilterResult.Blocked
+        val visibleMessage = ChatMessageFormatting.visibleText(message) { player.hasPermission(it) }
 
         val failedCheck = when {
-            checkAds(player, message, current) -> {
+            checkAds(player, visibleMessage, current) -> {
                 plugin.feedback("filters.ads", player, current.adsComponent)
                 Check.ADS
             }
 
-            checkWords(player, message, current) -> {
+            checkWords(player, visibleMessage, current) -> {
                 plugin.feedback("filters.words", player, current.wordsComponent)
                 Check.WORDS
             }
 
-            checkExcessiveSymbols(player, message, current) -> {
+            checkExcessiveSymbols(player, visibleMessage, current) -> {
                 plugin.feedback("filters.symbols", player, current.symbolsComponent)
                 Check.SYMBOLS
             }
 
-            checkChars(player, message, current) -> {
+            checkChars(player, visibleMessage, current) -> {
                 plugin.feedback("filters.characters", player, current.charsComponent)
                 Check.CHARACTERS
             }
 
-            checkRandomChars(player, message, current) -> {
+            checkRandomChars(player, visibleMessage, current) -> {
                 plugin.feedback("filters.random-chars", player, current.randomCharsComponent)
                 Check.RANDOM_CHARS
             }
 
-            checkSpam(player, message, current) -> {
+            checkSpam(player, visibleMessage, current) -> {
                 plugin.feedback("filters.spam", player, current.spamComponent)
                 Check.SPAM
             }
@@ -326,13 +329,16 @@ internal class FilterManager(
             return FilterResult.Blocked
         }
 
-        val filteredMessage = if (checkCaps(player, message, current)) {
+        val lowercased = checkCaps(player, visibleMessage, current)
+        val filteredMessage = if (lowercased) {
             message.lowercase(Locale.ROOT)
         } else {
             message
         }
 
-        if (commitHistory) rememberMessage(player.uniqueId, filteredMessage, current)
+        if (commitHistory) {
+            rememberMessage(player.uniqueId, if (lowercased) visibleMessage.lowercase(Locale.ROOT) else visibleMessage, current)
+        }
 
         return if (filteredMessage != message) {
             FilterResult.Modified(filteredMessage)
@@ -341,7 +347,11 @@ internal class FilterManager(
         }
     }
 
-    fun rememberMessage(player: UUID, message: String) = rememberMessage(player, message, settings)
+    fun rememberMessage(player: Player, message: String) = rememberMessage(
+        player.uniqueId,
+        ChatMessageFormatting.visibleText(message) { player.hasPermission(it) },
+        settings
+    )
 
     private fun rememberMessage(player: UUID, message: String, current: Settings) {
         val history = lastMessages.computeIfAbsent(player) { ArrayDeque() }

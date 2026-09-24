@@ -16,6 +16,7 @@ import nemallone.bworld.chat.messaging.AutoMessageManager
 import nemallone.bworld.chat.messaging.ChatHideManager
 import nemallone.bworld.chat.messaging.HintManager
 import nemallone.bworld.chat.messaging.MentionsManager
+import nemallone.bworld.chat.messaging.LocalSpyManager
 import nemallone.bworld.chat.messaging.FeedbackService
 import nemallone.bworld.chat.messaging.FeedbackSettings
 import nemallone.bworld.chat.filter.ai.AiFilterManager
@@ -48,6 +49,7 @@ class PupsChat : JavaPlugin() {
     private lateinit var mentionsManager: MentionsManager
     private lateinit var floodManager: FloodManager
     private lateinit var chatHideManager: ChatHideManager
+    private lateinit var localSpyManager: LocalSpyManager
     private lateinit var announcementManager: AnnouncementManager
     private lateinit var hintManager: HintManager
     private lateinit var autoMessageManager: AutoMessageManager
@@ -115,6 +117,7 @@ class PupsChat : JavaPlugin() {
             }
 
             chatHideManager = ChatHideManager(this, practiceIntegration)
+            localSpyManager = LocalSpyManager(this)
             announcementManager = AnnouncementManager(this)
             hintManager = HintManager(this)
             chatListener = ChatListener(
@@ -126,6 +129,7 @@ class PupsChat : JavaPlugin() {
                 toxicityManager,
                 aiFilter,
                 chatHideManager,
+                localSpyManager,
                 hintManager,
                 autoMessageManager,
             )
@@ -153,6 +157,9 @@ class PupsChat : JavaPlugin() {
             }
             if (::chatHideManager.isInitialized) {
                 queueFinalDataSave("chathide.yml", chatHideManager::queueSave)
+            }
+            if (::localSpyManager.isInitialized) {
+                queueFinalDataSave("localspy.yml", localSpyManager::queueSave)
             }
             if (::autoMessageManager.isInitialized) {
                 queueFinalDataSave("automessage.yml", autoMessageManager::queueSave)
@@ -182,6 +189,7 @@ class PupsChat : JavaPlugin() {
             "unmutef" -> handleFilterUnmuteCommand(sender, args)
             "acb" -> handleActionBarCommand(sender, args)
             "chathide" -> sender is Player && handleChatHideCommand(sender)
+            "localspy" -> sender is Player && handleLocalSpyCommand(sender, args)
             "automessage" -> sender is Player && handleAutoMessageCommand(sender)
             "mentions" -> sender is Player && handleMentionsCommand(sender)
             else -> false
@@ -419,6 +427,24 @@ class PupsChat : JavaPlugin() {
             ChatHideManager.Mode.OFF -> "<gray>Чат <color:#FF638F>скрыт"
         }
         sendSettingFeedback(player, message(path, fallback))
+        return true
+    }
+
+    private fun handleLocalSpyCommand(player: Player, args: Array<out String>): Boolean {
+        if (!player.hasPermission(LocalSpyManager.PERMISSION)) {
+            feedback("commands", player, message("no-permission", "<color:#FF638F>Недостаточно прав"))
+            return true
+        }
+        if (args.isNotEmpty()) {
+            feedback("commands", player, message("localspy-usage", "<gray>Использование: /localspy"))
+            return true
+        }
+        val enabled = localSpyManager.switchMode(player.uniqueId)
+        if (enabled) {
+            sendSettingFeedback(player, message("localspy-enabled", "<gray>Слежка за локальным чатом <color:#A4FF63>включена"))
+        } else {
+            sendSettingFeedback(player, message("localspy-disabled", "<gray>Слежка за локальным чатом <color:#FF638F>выключена"))
+        }
         return true
     }
 
