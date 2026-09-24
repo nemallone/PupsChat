@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "nemallone.bworld"
-version = "1.2"
+version = "1.2.1"
 
 repositories {
     mavenCentral()

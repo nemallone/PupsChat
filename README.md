@@ -50,6 +50,7 @@
 | `/unmutef <игрок>`           | Снять мут, выданный фильтром      | `pupschat.unmutef`     |
 | `/mentions`                  | Включить или выключить упоминания | `pupschat.mentions`    |
 | `/chathide`                  | Переключить видимость чата        | `pupschat.chat`        |
+| `/localspy`                  | Видеть локальный чат вне радиуса  | `pupschat.localspy`    |
 | `/automessage`               | Переключить сообщение после боя   | `pupschat.automessage` |
 | `/acb <ник\|@a> <сообщение>` | Отправить сообщение в action bar  | `pupschat.acb`         |
 
