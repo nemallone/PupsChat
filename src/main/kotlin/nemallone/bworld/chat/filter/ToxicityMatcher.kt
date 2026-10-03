@@ -114,6 +114,8 @@ internal object ToxicityMatcher {
         if (tokens.isEmpty()) return false
 
         val allowedTokens = markAllowedPhrases(tokens, lexicon.allowedPhrasesByFirstToken)
+        val selfTokens = SelfDirectedContext.ignoredTokens(tokenization)
+        for (index in allowedTokens.indices) allowedTokens[index] = allowedTokens[index] || selfTokens[index]
         if (matchesPhrase(tokens, lexicon.phrasesByFirstToken, allowedTokens)) return true
 
         for (index in tokens.indices) {
@@ -127,19 +129,39 @@ internal object ToxicityMatcher {
         return tokenizeDetailed(input).tokens
     }
 
-    private data class Tokenization(
+    internal data class Tokenization(
         val tokens: List<String>,
-        val punctuationBetween: List<Boolean>
+        val punctuationBetween: List<Boolean>,
+        val quotedTokens: List<Boolean>,
+        val source: String,
+        val spans: List<IntRange>,
+        val properNames: List<Boolean>
     )
 
-    private fun tokenizeDetailed(input: String): Tokenization {
-        if (input.isEmpty()) return Tokenization(emptyList(), emptyList())
+    internal fun tokenizeDetailed(input: String): Tokenization {
+        if (input.isEmpty()) return Tokenization(emptyList(), emptyList(), emptyList(), input, emptyList(), emptyList())
 
-        val normalized = Normalizer.normalize(input, Normalizer.Form.NFKC)
-            .lowercase(Locale.ROOT)
+        val caseSource = Normalizer.normalize(input, Normalizer.Form.NFKC)
+        val normalized = caseSource.lowercase(Locale.ROOT)
         val tokens = ArrayList<String>(8)
         val punctuationBetween = ArrayList<Boolean>(8)
         val rawToken = StringBuilder()
+        val quotedTokens = ArrayList<Boolean>(8)
+        val quotes = java.util.ArrayDeque<Int>()
+        var tokenQuoted = false
+        var tokenStart = 0
+        val spans = ArrayList<IntRange>(8)
+        val properNames = ArrayList<Boolean>(8)
+        fun flush(end: Int) {
+            val before = tokens.size
+            flushToken(rawToken, tokens)
+            if (tokens.size > before) {
+                quotedTokens.add(tokenQuoted)
+                spans.add(tokenStart until end)
+                val raw = caseSource.substring(tokenStart.coerceAtMost(caseSource.length), end.coerceAtMost(caseSource.length))
+                properNames.add(raw.firstOrNull()?.isUpperCase() == true && raw.any(Char::isLowerCase))
+            }
+        }
         var hasSeparator = false
         var separatorHasPunctuation = false
 
@@ -156,10 +178,18 @@ internal object ToxicityMatcher {
                         hasSeparator = false
                         separatorHasPunctuation = false
                     }
+                    if (rawToken.isEmpty()) { tokenQuoted = quotes.isNotEmpty(); tokenStart = offset - Character.charCount(codePoint) }
                     rawToken.appendCodePoint(codePoint)
                 }
                 else -> {
-                    if (rawToken.isNotEmpty()) flushToken(rawToken, tokens)
+                    if (rawToken.isNotEmpty()) flush(offset - Character.charCount(codePoint))
+                    when (codePoint) {
+                        '«'.code -> quotes.addLast('»'.code)
+                        '“'.code, '„'.code -> quotes.addLast('”'.code)
+                        '‘'.code -> quotes.addLast('’'.code)
+                        '"'.code, '\''.code -> if (quotes.peekLast() == codePoint) quotes.removeLast() else quotes.addLast(codePoint)
+                        '»'.code, '”'.code, '’'.code -> if (quotes.peekLast() == codePoint) quotes.removeLast()
+                    }
                     if (tokens.isNotEmpty()) {
                         hasSeparator = true
                         if (!Character.isWhitespace(codePoint)) separatorHasPunctuation = true
@@ -167,8 +197,8 @@ internal object ToxicityMatcher {
                 }
             }
         }
-        if (rawToken.isNotEmpty()) flushToken(rawToken, tokens)
-        return Tokenization(tokens, punctuationBetween)
+        if (rawToken.isNotEmpty()) flush(normalized.length)
+        return Tokenization(tokens, punctuationBetween, quotedTokens, normalized, spans, properNames)
     }
 
     private fun flushToken(rawToken: StringBuilder, tokens: MutableList<String>) {

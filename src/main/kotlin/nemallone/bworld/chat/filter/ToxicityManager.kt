@@ -96,7 +96,7 @@ internal class ToxicityManager(
 
         val configuredWarnings = config.getStringList("toxicity.messages")
         val warnings = configuredWarnings.ifEmpty {
-            listOf("<color:#FF638F>Это всего лишь игра. Относитесь к другим игрокам спокойнее.")
+            listOf("<color:#FF638F>Это всего лишь игра. Относись к другим игрокам спокойнее.")
         }
         val preparedWarnings = warnings.mapNotNull { message ->
             try {
@@ -109,7 +109,7 @@ internal class ToxicityManager(
         warningMessages = preparedWarnings.ifEmpty {
             listOf(
                 miniMessage.deserialize(
-                    "<color:#FF638F>Это всего лишь игра. Относитесь к другим игрокам спокойнее."
+                    "<color:#FF638F>Это всего лишь игра. Относись к другим игрокам спокойнее."
                 )
             )
         }
@@ -160,7 +160,8 @@ internal class ToxicityManager(
         if (!enabled || player.hasPermission("pupschat.bypass.toxicity")) {
             return FilterResult.Allowed
         }
-        if (!aiMatch && !lexiconStore.containsToxicity(message)) return FilterResult.Allowed
+        val lexicalMatch = lexiconStore.containsToxicity(message)
+        if (!lexicalMatch && (!aiMatch || SelfDirectedContext.isSelfOnly(message))) return FilterResult.Allowed
 
         val shouldMute = muteEnabled && addViolation(player.uniqueId)
         val warning = warningMessages.random()

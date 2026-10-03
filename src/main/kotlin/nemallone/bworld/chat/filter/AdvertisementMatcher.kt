@@ -17,10 +17,13 @@ internal class AdvertisementMatcher(
     private val maxBlockedDomainLength = blockedDomainNames.maxOfOrNull(String::length) ?: 0
     private val domainPatterns = blockedDomainNames.map(::createDomainPattern)
 
-    private val allowedLinkPatterns = allowedLinks.asSequence()
+    private val allowedLinkPatterns = allowedPatterns(allowedLinks, ::normalizeForMatching)
+    private val allowedAddressPatterns = allowedPatterns(allowedLinks, ::normalizeForAddresses)
+
+    private fun allowedPatterns(links: List<String>, normalize: (String) -> String): List<Pattern> = links.asSequence()
         .map(String::trim)
         .filter(String::isNotEmpty)
-        .map(::normalizeForMatching)
+        .map(normalize)
         .map { link ->
             Pattern.compile(
                 "(?<![\\p{L}\\p{N}-])${Pattern.quote(link)}(?![\\p{L}\\p{N}-])",
@@ -28,6 +31,36 @@ internal class AdvertisementMatcher(
             )
         }
         .toList()
+
+    // Разрешенный адрес задает контекст только при отсутствии чужих адресов
+    fun isAllowedAdvertisement(message: String): Boolean {
+        if (contains(message)) return false
+        val candidate = normalizeForAddresses(message)
+        val trustedRanges = findAllowedRanges(candidate, allowedAddressPatterns)
+        val allowedRanges = trustedRanges.toMutableList()
+        if (allowedRanges.isEmpty()) return false
+        val authorities = URL_AUTHORITY_PATTERN.matcher(candidate)
+        while (authorities.find()) {
+            val authority = authorities.group(1).trimEnd('.', ',', '!', ';', ')')
+            val port = PORT_PATTERN.matcher(authority)
+            val hostLength = if (port.find() && port.group(1).toIntOrNull() in 1..65535) port.start() else authority.length
+            if (!isAllowed(authorities.start(1), authorities.start(1) + hostLength, trustedRanges)) return false
+            // Имя файла в пути доверенного URL не является отдельным адресом
+            var pathEnd = authorities.end(1)
+            if (candidate.getOrNull(pathEnd) == '/') {
+                while (pathEnd < candidate.length && !candidate[pathEnd].isWhitespace() && candidate[pathEnd] !in "?#") pathEnd++
+                allowedRanges.add(authorities.start(1) until pathEnd)
+            }
+        }
+        for (pattern in arrayOf(ADDRESS_PATTERN, IPV6_PATTERN)) {
+            val matcher = pattern.matcher(candidate)
+            while (matcher.find()) {
+                if (pattern === IPV6_PATTERN && "::" !in matcher.group() && matcher.group().count { it == ':' } < 7) continue
+                if (!isAllowed(matcher.start(), matcher.end(), allowedRanges)) return false
+            }
+        }
+        return true
+    }
 
     fun contains(message: String): Boolean {
         val candidate = normalizeForMatching(message)
@@ -38,8 +71,11 @@ internal class AdvertisementMatcher(
         return containsUnderscoredDomain(candidate, allowedRanges)
     }
 
-    private fun findAllowedRanges(input: String): List<IntRange> = buildList {
-        for (pattern in allowedLinkPatterns) {
+    private fun findAllowedRanges(
+        input: String,
+        patterns: List<Pattern> = allowedLinkPatterns
+    ): List<IntRange> = buildList {
+        for (pattern in patterns) {
             val matcher = pattern.matcher(input)
             while (matcher.find()) add(matcher.start() until matcher.end())
         }
@@ -71,10 +107,13 @@ internal class AdvertisementMatcher(
         return normalized.toString()
     }
 
+    private fun normalizeForAddresses(input: String): String {
+        val compact = WHITESPACE_PATTERN.matcher(input.lowercase(Locale.ROOT)).replaceAll(" ").trim()
+        return normalizeHomoglyphs(compact).replace('。', '.').replace('．', '.').replace('｡', '.')
+    }
+
     private fun normalizeForMatching(input: String): String {
-        val lowercase = input.lowercase(Locale.ROOT)
-        val compactWhitespace = WHITESPACE_PATTERN.matcher(lowercase).replaceAll(" ").trim()
-        val normalized = normalizeHomoglyphs(compactWhitespace)
+        val normalized = normalizeForAddresses(input)
         val normalizedSlashes = SLASH_SEPARATOR.matcher(normalized).replaceAll(".")
         val normalizedDots = PARENTHESIZED_SEPARATOR.matcher(normalizedSlashes).replaceAll(".")
         return UNDERSCORE_SEPARATOR.matcher(normalizedDots).replaceAll("_")
@@ -166,6 +205,13 @@ internal class AdvertisementMatcher(
     }
 
     private companion object {
+        val ADDRESS_PATTERN: Pattern = Pattern.compile(
+            "(?<![\\p{L}\\p{N}_-])(?:[\\p{L}\\p{N}][\\p{L}\\p{N}_-]*[.])+" +
+                "[\\p{L}][\\p{L}\\p{N}_-]*(?![\\p{L}\\p{N}_-])"
+        )
+        val IPV6_PATTERN: Pattern = Pattern.compile("(?<![a-f0-9:])\\[?(?:[a-f0-9]{0,4}:){2,}[a-f0-9:.%_-]*\\]?")
+        val PORT_PATTERN: Pattern = Pattern.compile(":([0-9]{1,5})$")
+        val URL_AUTHORITY_PATTERN: Pattern = Pattern.compile("(?:[a-z][a-z0-9+.-]*:)?//([^\\s/?#]+)")
         val IP_PATTERN: Pattern = Pattern.compile(
             "(?<!\\d)(\\d{1,3})([.,\\s]+)(\\d{1,3})([.,\\s]+)" +
                 "(\\d{1,3})([.,\\s]+)(\\d{1,3})(?!\\d)"

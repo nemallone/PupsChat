@@ -25,7 +25,7 @@ internal class AiFilterManager(private val plugin: PupsChat) : AutoCloseable {
         val current = active ?: return null
         val verdict = current.model.classify(text)
         checked++
-        if (verdict.category != FilterCategory.TARGETED_INSULT || verdict.confidence < current.threshold) {
+        if (verdict.category == FilterCategory.ALLOW || verdict.confidence < current.threshold) {
             return null
         }
         matched++
@@ -33,7 +33,7 @@ internal class AiFilterManager(private val plugin: PupsChat) : AutoCloseable {
     }
 
     fun status(): Component = Component.text(
-        if (active == null) "ИИ-фильтр выключен" else "ИИ-фильтр включён. Проверено $checked, срабатываний $matched",
+        if (active == null) "ИИ-фильтр выключен" else "ИИ-фильтр включен. Проверено $checked, срабатываний $matched",
         TextColor.color(0xAAAAAA),
     )
 

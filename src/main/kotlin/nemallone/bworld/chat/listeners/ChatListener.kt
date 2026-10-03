@@ -358,7 +358,7 @@ internal class ChatListener(
         if (selected.rejection != null) {
             val feedback = when (selected.rejection) {
                 ChannelRejection.NO_PERMISSION -> "no-permission" to "<color:#FF638F>Недостаточно прав"
-                ChannelRejection.EMPTY -> "empty-message" to "<gray>Введите сообщение"
+                ChannelRejection.EMPTY -> "empty-message" to "<gray>Сообщение не может быть пустым"
             }
             plugin.feedback(feedback.first, sender, plugin.message(feedback.first, feedback.second))
             return reject(selected.rejection.name.lowercase(Locale.ROOT))
@@ -379,11 +379,16 @@ internal class ChatListener(
         }
         val visibleMessage = ChatMessageFormatting.visibleText(plainMessage) { sender.hasPermission(it) }
         if (visibleMessage.isBlank()) {
-            plugin.feedback("empty-message", sender, plugin.message("empty-message", "<gray>Введите сообщение"))
+            plugin.feedback("empty-message", sender, plugin.message("empty-message", "<gray>Сообщение не может быть пустым"))
             return reject("empty")
         }
         val aiCategory = if (autoMessage || channel == ChatChannel.STAFF || sender.hasPermission("pupschat.bypass.ai")) null
             else aiFilter.classify(visibleMessage)
+        if (aiCategory == FilterCategory.ADVERTISING &&
+            filterManager.rejectAiAdvertising(sender, visibleMessage, null) == FilterResult.Blocked
+        ) {
+            return reject("ai-advertising")
+        }
         if (toxicityManager.checkMessage(sender, visibleMessage, aiCategory == FilterCategory.TARGETED_INSULT) == FilterResult.Blocked) {
             return reject("toxicity")
         }
@@ -513,7 +518,7 @@ internal class ChatListener(
             return FilterResult.Blocked
         }
         if (ChatMessageFormatting.visibleText(replacedMessage) { player.hasPermission(it) }.isBlank()) {
-            plugin.feedback("empty-message", player, plugin.message("empty-message", "<gray>Введите сообщение"))
+            plugin.feedback("empty-message", player, plugin.message("empty-message", "<gray>Сообщение не может быть пустым"))
             return FilterResult.Blocked
         }
         return when (
@@ -643,11 +648,19 @@ internal class ChatListener(
             return
         }
 
-        if (
-            command.checkToxicity &&
+        val visibleMessage = ChatMessageFormatting.visibleText(finalMessage) { player.hasPermission(it) }
+        val aiCategory = if (player.hasPermission("pupschat.bypass.ai")) null else aiFilter.classify(visibleMessage)
+        if (aiCategory == FilterCategory.ADVERTISING &&
+            filterManager.rejectAiAdvertising(player, visibleMessage, command.context) == FilterResult.Blocked
+        ) {
+            event.isCancelled = true
+            return
+        }
+        if (command.checkToxicity &&
             toxicityManager.checkMessage(
                 player,
-                ChatMessageFormatting.visibleText(finalMessage) { player.hasPermission(it) }
+                visibleMessage,
+                aiCategory == FilterCategory.TARGETED_INSULT,
             ) == FilterResult.Blocked
         ) {
             event.isCancelled = true

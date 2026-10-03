@@ -28,7 +28,7 @@ internal class FilterManager(
 
     private enum class Check(val configKey: String, val defaultName: String) {
         ADS("ads", "Реклама"),
-        WORDS("words", "Запрещённые слова"),
+        WORDS("words", "Запрещенные слова"),
         SYMBOLS("symbols", "Символы"),
         CHARACTERS("characters", "Недопустимые символы"),
         RANDOM_CHARS("random-chars", "Случайные символы"),
@@ -78,15 +78,15 @@ internal class FilterManager(
         private const val DEFAULT_RANDOM_CHARS_MESSAGE =
             "<color:#FF638F>Обнаружен бессмысленный набор символов"
         private const val DEFAULT_SPAM_MESSAGE =
-            "<color:#FF638F>Не повторяйте сообщения"
+            "<color:#FF638F>Не повторяй сообщения"
         private const val DEFAULT_ADS_MESSAGE =
-            "<color:#FF638F>Не отправляйте рекламу"
+            "<color:#FF638F>Реклама запрещена"
         private const val DEFAULT_WORDS_MESSAGE =
-            "<color:#FF638F>Обнаружено запрещённое слово"
+            "<color:#FF638F>Обнаружено запрещенное слово"
         private const val DEFAULT_SYMBOLS_MESSAGE =
             "<color:#FF638F>Слишком много спецсимволов в сообщении"
         private const val DEFAULT_PLAYTIME_MESSAGE =
-            "<color:#FF638F>Наиграйте минимум %minutes% минут для использования чата"
+            "<color:#FF638F>Наиграй минимум %minutes% минут для использования чата"
         private const val DEFAULT_ALERT_FORMAT =
             "<color:#FCD05C>[ғɪʟᴛᴇʀ] <gray>{player} <white>{check} " +
                 "<color:#FF638F>✘ <white>x{violations} <color:#FCD05C>{message}"
@@ -345,6 +345,20 @@ internal class FilterManager(
         } else {
             FilterResult.Allowed
         }
+    }
+
+    /** Применяет к рекламе из локальной модели те же предупреждения и наказания, что и обычный фильтр. */
+    fun rejectAiAdvertising(player: Player, message: String, privateContext: String?): FilterResult {
+        val current = settings
+        if (!current.adsEnabled || player.hasPermission("pupschat.bypass.ads") ||
+            current.advertisementMatcher.isAllowedAdvertisement(message)
+        ) {
+            return FilterResult.Allowed
+        }
+        plugin.feedback("filters.ads", player, current.adsComponent)
+        val violations = violationManager.addViolation(player)
+        sendAlert(player, Check.ADS, violations, message, privateContext, current)
+        return FilterResult.Blocked
     }
 
     fun rememberMessage(player: Player, message: String) = rememberMessage(

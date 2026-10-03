@@ -1,5 +1,7 @@
 package nemallone.bworld.chat.filter.ai
 
+import nemallone.bworld.chat.filter.SelfDirectedContext
+import nemallone.bworld.chat.filter.ToxicityMatcher
 import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.nio.file.Files
@@ -14,6 +16,21 @@ internal class LocalFilterProvider private constructor(
     private val bias: FloatArray,
 ) {
     fun classify(message: String): FilterVerdict {
+        val original = classifyModel(message)
+        if (original.category != FilterCategory.TARGETED_INSULT) return original
+        val remaining = SelfDirectedContext.remainingText(message)
+        // У модели эта короткая похвала ошибочно попадает в адресные оскорбления
+        if (isPlainPraise(remaining ?: message)) return FilterVerdict(FilterCategory.ALLOW, 1.0)
+        return if (remaining == null) original else classifyModel(remaining)
+    }
+
+    private fun isPlainPraise(message: String): Boolean {
+        val words = ToxicityMatcher.tokenize(message)
+        return words == listOf("ты", "молодец") || words == listOf("но", "ты", "молодец") ||
+            words == listOf("ты", "лучше") || words == listOf("а", "ты", "лучше")
+    }
+
+    internal fun classifyModel(message: String): FilterVerdict {
         val normalized = normalize(message)
         if (normalized.isEmpty()) return FilterVerdict(FilterCategory.ALLOW, 1.0)
 
