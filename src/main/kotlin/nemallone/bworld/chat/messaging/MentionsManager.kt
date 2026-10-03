@@ -100,6 +100,6 @@ internal class MentionsManager(private val plugin: PupsChat) {
 
     private companion object {
         const val DATA_FILE_NAME = "mentions.yml"
-        const val DEFAULT_ACTION_BAR = "<color:#FFDD81>%player% <gray>упомянул вас в чате"
+        const val DEFAULT_ACTION_BAR = "<gray>Упоминание в чате от <color:#FFDD81>%player%"
     }
 }

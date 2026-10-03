@@ -2,9 +2,9 @@ name: PupsChat
 version: '${version}'
 main: nemallone.bworld.chat.PupsChat
 api-version: '1.21'
-description: Настраиваемый чат и автоматическая модерация для Paper
+description: Топовый плагин на чат, от bworld.pro
 authors: [bworld, nemallone]
-website: https://github.com/nemallone/PupsChat
+website: https://site.bworld.pro
 softdepend: [PremiumVanish, Essentials, PlaceholderAPI, StrikePractice]
 libraries:
   - org.jetbrains.kotlin:kotlin-stdlib:2.1.20

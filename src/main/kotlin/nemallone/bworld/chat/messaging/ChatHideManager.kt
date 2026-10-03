@@ -63,8 +63,9 @@ internal class ChatHideManager(
 
         for (key in section.getKeys(false)) {
             try {
-                val mode = Mode.fromString(section.getString(key) ?: "all")
-                if (mode != null && mode != Mode.ALL) modes[UUID.fromString(key)] = mode
+                val value = section.getString(key) ?: continue
+                val mode = Mode.fromString(value)
+                if (mode != null && mode != DEFAULT_MODE) modes[UUID.fromString(key)] = mode
             } catch (_: IllegalArgumentException) {
                 plugin.logger.warning("Некорректный UUID в chathide.yml: $key")
             }
@@ -75,16 +76,16 @@ internal class ChatHideManager(
         val snapshot = modes.toMap()
         dataSaver.save(DATA_FILE_NAME) { config ->
             for ((uuid, mode) in snapshot) {
-                if (mode == Mode.ALL) continue
+                if (mode == DEFAULT_MODE) continue
                 config.set("modes.$uuid", mode.name.lowercase(Locale.ROOT))
             }
         }
     }
 
-    fun getMode(uuid: UUID): Mode = modes.getOrDefault(uuid, Mode.ALL)
+    fun getMode(uuid: UUID): Mode = modes.getOrDefault(uuid, DEFAULT_MODE)
 
     fun setMode(uuid: UUID, mode: Mode) {
-        if (mode == Mode.ALL) modes.remove(uuid)
+        if (mode == DEFAULT_MODE) modes.remove(uuid)
         else modes[uuid] = mode
         queueSave()
     }
@@ -116,5 +117,6 @@ internal class ChatHideManager(
 
     private companion object {
         const val DATA_FILE_NAME = "chathide.yml"
+        val DEFAULT_MODE = Mode.DUEL
     }
 }

@@ -79,6 +79,6 @@ internal class FloodManager(
     }
 
     private companion object {
-        const val DEFAULT_MESSAGE = "<color:#FF638F>Вы отправляете сообщения слишком быстро"
+        const val DEFAULT_MESSAGE = "<color:#FF638F>Слишком частая отправка сообщений"
     }
 }

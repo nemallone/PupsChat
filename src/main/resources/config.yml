@@ -87,7 +87,7 @@ mentions:
     # Эти слова работают как глобальное упоминание: @all и @все
     # Пустой список [] полностью отключает глобальные упоминания
     global-aliases: [ "all", "все" ]
-    action-bar: "<color:#FFDD81>%player% <gray>упомянул вас в чате"
+    action-bar: "<gray>Упоминание в чате от <color:#FFDD81>%player%"
     sound:
         name: "entity.experience_orb.pickup"
         volume: 1.0
@@ -108,7 +108,7 @@ playtime:
     enabled: false
     # Минимальное количество минут на сервере перед доступом к чату
     min-minutes: 3
-    message: "<color:#FF638F>Наиграйте минимум %minutes% минут для использования чата"
+    message: "<color:#FF638F>Наиграй минимум %minutes% минут для использования чата"
 
 caps:
     enabled: true
@@ -147,14 +147,14 @@ spam:
     # Сколько последних сообщений игрока сравнивать и как долго хранить их в секундах
     history-messages: 2
     history-seconds: 60
-    message: "<color:#FF638F>Не повторяйте сообщения"
+    message: "<color:#FF638F>Не повторяй сообщения"
 
 flood:
     enabled: true
     # Игрок может отправить не больше max-messages за time-window секунд
     max-messages: 4
     time-window: 6
-    message: "<color:#FF638F>Вы отправляете сообщения слишком быстро"
+    message: "<color:#FF638F>Слишком частая отправка сообщений"
 
 ads:
     enabled: true
@@ -178,10 +178,10 @@ ads:
         - ".gg"
         - ".pw"
         - ".me"
-    # Ссылки из этого списка разрешены и не считаются рекламой
+    # Доверенные адреса разрешены также ИИ-фильтром, если в сообщении нет чужих адресов
     # Пример: [ "bworld.pro", "dsc.bworld.pro" ]
     allowed-links: []
-    message: "<color:#FF638F>Не отправляйте рекламу"
+    message: "<color:#FF638F>Реклама запрещена"
 
 words:
     enabled: true
@@ -189,7 +189,7 @@ words:
     # Каждое новое слово или выражение добавляйте отдельной строкой
     # blocked-words: [ "запрещённое слово", "еще запрещённое словосочетание" ]
     blocked-words: []
-    message: "<color:#FF638F>Обнаружено запрещённое слово"
+    message: "<color:#FF638F>Обнаружено запрещенное слово"
 
 random-chars:
     enabled: true
@@ -224,8 +224,8 @@ toxicity:
     max-violations: 10
     window-minutes: 10
     messages:
-        - "<color:#FF638F>Это всего лишь игра. Будьте спокойнее"
-        - "<color:#FF638F>Будьте игроком, которого уважают другие"
+        - "<color:#FF638F>Это всего лишь игра. Будь спокойнее"
+        - "<color:#FF638F>Будь игроком, которого уважают другие"
     # Правила находятся в toxicity.txt рядом с config.yml и перечитываются при /pupschat reload
     # Слова-исключения проверяются раньше exact и stem и никогда не считаются токсичными
     # allowed-words: [ "педикюр" ]
@@ -245,7 +245,7 @@ alerts:
     format: "<color:#FCD05C>[ғɪʟᴛᴇʀ] <gray>{player} <white>{check} <color:#FF638F>✘ <white>x{violations} <color:#FCD05C>{message}"
     check-names:
         ads: "Реклама"
-        words: "Запрещённые слова"
+        words: "Запрещенные слова"
         symbols: "Символы"
         characters: "Недопустимые символы"
         random-chars: "Случайные символы"
@@ -323,7 +323,7 @@ command-messages:
     invalid-format: "<color:#FF638F>Ошибка форматирования: {error}"
     player-not-found: "<color:#FF638F>Игрок не найден"
     channel-disabled: "<color:#FF638F>Этот канал недоступен"
-    empty-message: "<gray>Введите сообщение"
+    empty-message: "<gray>Сообщение не может быть пустым"
     message-too-long: "<color:#FF638F>Сообщение слишком длинное"
     local-no-audience: "<gray>Рядом нет игроков, которые увидят сообщение"
     chat-all: "<gray>Чат <color:#A4FF63>открыт"
@@ -332,7 +332,7 @@ command-messages:
     localspy-usage: "<gray>Использование: /localspy"
     localspy-enabled: "<gray>Слежка за локальным чатом <color:#A4FF63>включена"
     localspy-disabled: "<gray>Слежка за локальным чатом <color:#FF638F>выключена"
-    auto-message-default: "<gray>Автосообщения <color:#A4FF63>включены <gray>(<color:#FFDD81>ᴏбычʜый<gray>)"
+    auto-message-default: "<gray>Автосообщения <color:#A4FF63>включены <gray>(<color:#FFDD81>ᴏҕычʜый<gray>)"
     auto-message-toxic: "<gray>Автосообщения <color:#A4FF63>включены <gray>(<color:#FFDD81>тᴏᴋᴄиᴋ<gray>)"
     auto-message-off: "<gray>Автосообщения <color:#FF638F>выключены"
     auto-message-unavailable: "<color:#FF638F>Автосообщения сейчас недоступны"

@@ -19,6 +19,7 @@ import nemallone.bworld.chat.messaging.MentionsManager
 import nemallone.bworld.chat.messaging.LocalSpyManager
 import nemallone.bworld.chat.messaging.FeedbackService
 import nemallone.bworld.chat.messaging.FeedbackSettings
+import nemallone.bworld.chat.placeholders.PupsChatExpansion
 import nemallone.bworld.chat.filter.ai.AiFilterManager
 import nemallone.bworld.chat.filter.ai.AiFilterSettings
 import net.kyori.adventure.text.Component
@@ -58,6 +59,7 @@ class PupsChat : JavaPlugin() {
     private lateinit var dataSaver: PlayerDataSaver
     private lateinit var feedbackService: FeedbackService
     private lateinit var aiFilter: AiFilterManager
+    private var placeholderExpansion: PupsChatExpansion? = null
     private var practiceIntegration: PracticeIntegration? = null
     private val invalidMessageKeys = HashSet<String>()
 
@@ -117,6 +119,13 @@ class PupsChat : JavaPlugin() {
             }
 
             chatHideManager = ChatHideManager(this, practiceIntegration)
+            if (server.pluginManager.isPluginEnabled("PlaceholderAPI")) {
+                placeholderExpansion = PupsChatExpansion(this, chatHideManager).also { expansion ->
+                    if (!expansion.register()) {
+                        logger.warning("Не удалось зарегистрировать PlaceholderAPI expansion")
+                    }
+                }
+            }
             localSpyManager = LocalSpyManager(this)
             announcementManager = AnnouncementManager(this)
             hintManager = HintManager(this)
@@ -145,6 +154,8 @@ class PupsChat : JavaPlugin() {
     }
 
     override fun onDisable() {
+        placeholderExpansion?.unregister()
+        placeholderExpansion = null
         if (::chatListener.isInitialized) chatListener.close()
         if (::aiFilter.isInitialized) aiFilter.close()
         if (::announcementManager.isInitialized) announcementManager.stopTask()
@@ -473,7 +484,7 @@ class PupsChat : JavaPlugin() {
         val fallback = when (mode) {
             AutoMessageMode.DEFAULT ->
                 "<gray>Автосообщения <color:#A4FF63>включены " +
-                    "<gray>(<color:#FFDD81>ᴏбычʜый<gray>)"
+                    "<gray>(<color:#FFDD81>ᴏҕычʜый<gray>)"
             AutoMessageMode.TOXIC ->
                 "<gray>Автосообщения <color:#A4FF63>включены " +
                     "<gray>(<color:#FFDD81>тᴏᴋᴄиᴋ<gray>)"

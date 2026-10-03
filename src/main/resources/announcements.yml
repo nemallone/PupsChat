@@ -3,7 +3,7 @@ interval: 300
 
 messages:
   - lines:
-      - "<color:#FFDD81>Настройте объявления в plugins/PupsChat/announcements.yml"
+      - "<color:#FFDD81>Настрой объявления в plugins/PupsChat/announcements.yml"
     sound:
       name: "block.note_block.hat"
       volume: 0.5
