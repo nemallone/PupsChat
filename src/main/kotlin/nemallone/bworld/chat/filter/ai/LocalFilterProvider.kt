@@ -16,12 +16,19 @@ internal class LocalFilterProvider private constructor(
     private val bias: FloatArray,
 ) {
     fun classify(message: String): FilterVerdict {
+        // У одного или двух слов нормировка делает оценку слишком уверенной, а слова в одиночку не доказывают нарушение
+        if (wordCount(message) < MIN_WORDS) return FilterVerdict(FilterCategory.ALLOW, 1.0)
         val original = classifyModel(message)
         if (original.category != FilterCategory.TARGETED_INSULT) return original
         val remaining = SelfDirectedContext.remainingText(message)
         // У модели эта короткая похвала ошибочно попадает в адресные оскорбления
         if (isPlainPraise(remaining ?: message)) return FilterVerdict(FilterCategory.ALLOW, 1.0)
         return if (remaining == null) original else classifyModel(remaining)
+    }
+
+    private fun wordCount(message: String): Int {
+        val normalized = normalize(message)
+        return if (normalized.isEmpty()) 0 else normalized.count { it == ' ' } + 1
     }
 
     private fun isPlainPraise(message: String): Boolean {
@@ -89,6 +96,7 @@ internal class LocalFilterProvider private constructor(
         private const val DIMENSIONS = 16_384
         private const val MAX_LENGTH = 512
         private const val MAX_FEATURES = 2_048
+        private const val MIN_WORDS = 3
         private const val CLASS_COUNT = 3
         private val CATEGORIES = arrayOf(FilterCategory.ALLOW, FilterCategory.ADVERTISING, FilterCategory.TARGETED_INSULT)
 
