@@ -242,7 +242,7 @@ ai-filter:
 alerts:
     # Служебное уведомление персоналу с правом pupschat.alerts
     # Доступны: {player}, {check}, {violations} и {message}
-    format: "<color:#FCD05C>[ғɪʟᴛᴇʀ] <gray>{player} <white>{check} <color:#FF638F>✘ <white>x{violations} <color:#FCD05C>{message}"
+    format: "<color:#FCD05C>[ꜰɪʟᴛᴇʀ] <gray>{player} <white>{check} <color:#FF638F>✘ <white>x{violations} <color:#FCD05C>{message}"
     check-names:
         ads: "Реклама"
         words: "Запрещенные слова"

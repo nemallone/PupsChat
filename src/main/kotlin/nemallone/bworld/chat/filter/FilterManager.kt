@@ -88,7 +88,7 @@ internal class FilterManager(
         private const val DEFAULT_PLAYTIME_MESSAGE =
             "<color:#FF638F>Наиграй минимум %minutes% минут для использования чата"
         private const val DEFAULT_ALERT_FORMAT =
-            "<color:#FCD05C>[ғɪʟᴛᴇʀ] <gray>{player} <white>{check} " +
+            "<color:#FCD05C>[ꜰɪʟᴛᴇʀ] <gray>{player} <white>{check} " +
                 "<color:#FF638F>✘ <white>x{violations} <color:#FCD05C>{message}"
         private val NAME_CANDIDATE_PATTERN = Pattern.compile("(?<![\\p{L}\\p{N}_])@?[A-Za-z0-9_]{3,16}(?![\\p{L}\\p{N}_])")
         private const val PUNCT = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
